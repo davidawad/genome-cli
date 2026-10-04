@@ -237,7 +237,12 @@ fn lookup_row_keys_follow_the_contract() {
             "lifted_from"
         ]
     );
-    // Unknown rsid: missing row plus a warning.
+}
+
+#[test]
+fn lookup_unknown_rsid_is_missing_with_warning() {
+    let e = Env::new();
+    e.import("23andme_male.txt", "m");
     let v = e.json(&["lookup", "m", "--rsid", "rs999999999"]);
     assert_eq!(v["data"][0]["call_source"], "missing");
     assert!(!v["warnings"].as_array().unwrap().is_empty());
