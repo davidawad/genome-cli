@@ -5,6 +5,127 @@ whole-genome VCFs and raw FASTQ reads, normalized into one genotype model.
 Sibling of [biomarker-cli](https://gitlab.com/davidawad/biomarker-cli); feeds
 genetics.el through the versioned [`genome/v1` JSON contract](docs/json-schema.md).
 
+![genome importing a 23andMe export and a GRCh38 WGS VCF, then summary, an APOE lookup and a cross-build compare](docs/screenshots/tour.svg)
+
+## 60-second tour
+
+Real output of the `genome` binary on the repo's synthetic fixtures (no real
+person's data): a 23andMe-format export
+([`tests/fixtures/23andme_male.txt`](tests/fixtures/23andme_male.txt), GRCh37,
+rsids) and a variant-only WGS VCF with no rsids
+([`tests/fixtures/wgs_grch38.vcf.gz`](tests/fixtures/wgs_grch38.vcf.gz),
+GRCh38). Note APOE `rs7412` resolved by position and reported `inferred_ref`,
+and `compare` lifting the array to GRCh38 before scoring concordance.
+
+<!-- sample:tour -->
+```console
+$ genome import tests/fixtures/23andme_male.txt --name jane
+importing tests/fixtures/23andme_male.txt as k1 (23andme)
+imported k1 'jane': 113 records, 23andme GRCh37 (header), ref_calls explicit
+ID  NAME  SOURCE_FORMAT  ASSAY  BUILD   RECORDS  HAS_RSIDS  REF_CALLS  SAMPLE
+──  ────  ─────────────  ─────  ──────  ───────  ─────────  ─────────  ──────
+k1  jane  23andme        array  GRCh37      113  true       explicit   jane
+$ genome import tests/fixtures/wgs_grch38.vcf.gz --name wgs
+importing tests/fixtures/wgs_grch38.vcf.gz as k2 (vcf)
+imported k2 'wgs': 70 records, vcf GRCh38 (contig-lengths), ref_calls absent-means-ref
+ID  NAME  SOURCE_FORMAT  ASSAY  BUILD   RECORDS  HAS_RSIDS  REF_CALLS         SAMPLE
+──  ────  ─────────────  ─────  ──────  ───────  ─────────  ────────────────  ───────
+k2  wgs   vcf            wgs    GRCh38       70  false      absent-means-ref  SYNTH38
+$ genome summary
+KIT  RECORDS  NO_CALLS  HET  HOM_ALT  HOM_REF  HOM_UNKNOWN_REF  HEMIZYGOUS  SEX
+───  ───────  ────────  ───  ───────  ───────  ───────────────  ──────────  ────
+k1       113         5   16        0        0               46          46  male
+k2        70         1   21       42        0                0           6  male
+$ genome lookup wgs --rsid rs429358,rs7412
+genome: warning: rs429358: kit has no rsids; resolved via curated table to 19:44908684 (GRCh38)
+genome: warning: rs7412: kit has no rsids; resolved via curated table to 19:44908822 (GRCh38)
+genome: warning: call_source inferred_ref: site absent from a variant-only WGS VCF (ref_calls = absent-means-ref) and reported as homozygous reference because the assay covers the genome
+KIT  RSID      CHROM  POS       BUILD   REF  ALT  GENOTYPE  ZYGOSITY  CALL_SOURCE   FILTER  QUALITY  DEPTH
+───  ────────  ─────  ────────  ──────  ───  ───  ────────  ────────  ────────────  ──────  ───────  ─────
+k2   rs429358     19  44908684  GRCh38  T    C    TC        het       observed      PASS     50.000     30
+k2   rs7412       19  44908822  GRCh38  C    T    CC        hom_ref   inferred_ref
+$ genome compare wgs jane
+genome: warning: k1 lifted from GRCh37 to GRCh38 for comparison
+genome: warning: 103 sites of k1 did not lift over
+genome: warning: call_source inferred_ref: site absent from a variant-only WGS VCF (ref_calls = absent-means-ref) and reported as homozygous reference because the assay covers the genome
+A   B   BUILD   OVERLAP  CONCORDANT  DISCORDANT  CONCORDANCE  INFERRED_REF_SITES
+──  ──  ──────  ───────  ──────────  ──────────  ───────────  ──────────────────
+k2  k1  GRCh38        5           3           2        0.600                   2
+```
+<!-- /sample:tour -->
+
+The same lookup for a machine reader: every format shares the versioned
+[`genome/v1` envelope](docs/json-schema.md), warnings included.
+
+<!-- sample:json -->
+```console
+$ genome lookup wgs --rsid rs7412 --format json
+{
+  "schema": "genome/v1",
+  "kind": "genotypes",
+  "generated_at": "2026-09-21T14:13:20Z",
+  "count": 1,
+  "data": [
+    {
+      "kit": "k2",
+      "rsid": "rs7412",
+      "chrom": "19",
+      "pos": 44908822,
+      "build": "GRCh38",
+      "ref": "C",
+      "alt": [
+        "T"
+      ],
+      "genotype": "CC",
+      "zygosity": "hom_ref",
+      "call_source": "inferred_ref",
+      "filter": null,
+      "quality": null,
+      "depth": null,
+      "lifted_from": null
+    }
+  ],
+  "warnings": [
+    "rs7412: kit has no rsids; resolved via curated table to 19:44908822 (GRCh38)",
+    "call_source inferred_ref: site absent from a variant-only WGS VCF (ref_calls = absent-means-ref) and reported as homozygous reference because the assay covers the genome"
+  ]
+}
+```
+<!-- /sample:json -->
+
+FASTQ is planned (and with `pipeline run`, executed) as align, sort, markdup,
+call, filter, normalize and import steps; `plan` is a dry run:
+
+<!-- sample:pipeline -->
+```console
+$ genome pipeline plan SYN_S1_L001_R1_001.fastq.gz SYN_S1_L001_R2_001.fastq.gz --out run1 --region chr19:44.9M-45.0M --quiet --columns step,tool,status
+STEP             TOOL      STATUS
+───────────────  ────────  ───────
+fetch-reference  genome    planned
+index            samtools  planned
+index            minimap2  planned
+align            minimap2  planned
+markdup          samtools  planned
+sort             samtools  planned
+markdup          samtools  planned
+index            samtools  planned
+call             bcftools  planned
+call             bcftools  planned
+filter           bcftools  planned
+normalize        bcftools  planned
+normalize        bcftools  planned
+import           genome    planned
+```
+<!-- /sample:pipeline -->
+
+Regenerate every sample and the screenshot with
+[`scripts/readme-samples.sh`](scripts/readme-samples.sh) (`just readme`);
+`cargo test` fails if they drift from what the binary prints
+(`tests/readme_samples.rs`); `SOURCE_DATE_EPOCH` pins the JSON
+`generated_at`. The session uses the tiny synthetic chain files
+from `tests/fixtures` in place of the UCSC ones so it runs offline, which is
+why most of the array's sites do not lift.
+
 ## Three kinds of data, one model
 
 1. **Array exports** (23andMe, AncestryDNA, MyHeritage, FTDNA): ~600k

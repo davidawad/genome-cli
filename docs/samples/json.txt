@@ -1,0 +1,31 @@
+$ genome lookup wgs --rsid rs7412 --format json
+{
+  "schema": "genome/v1",
+  "kind": "genotypes",
+  "generated_at": "2026-09-21T14:13:20Z",
+  "count": 1,
+  "data": [
+    {
+      "kit": "k2",
+      "rsid": "rs7412",
+      "chrom": "19",
+      "pos": 44908822,
+      "build": "GRCh38",
+      "ref": "C",
+      "alt": [
+        "T"
+      ],
+      "genotype": "CC",
+      "zygosity": "hom_ref",
+      "call_source": "inferred_ref",
+      "filter": null,
+      "quality": null,
+      "depth": null,
+      "lifted_from": null
+    }
+  ],
+  "warnings": [
+    "rs7412: kit has no rsids; resolved via curated table to 19:44908822 (GRCh38)",
+    "call_source inferred_ref: site absent from a variant-only WGS VCF (ref_calls = absent-means-ref) and reported as homozygous reference because the assay covers the genome"
+  ]
+}
