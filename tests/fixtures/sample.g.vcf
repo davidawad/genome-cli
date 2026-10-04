@@ -1,0 +1,15 @@
+##fileformat=VCFv4.2
+##GVCFBlock0-1=minGQ=0(inclusive),maxGQ=1(exclusive)
+##ALT=<ID=NON_REF,Description="Any non-reference allele">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End">
+##contig=<ID=chr1,length=248956422>
+##contig=<ID=chr2,length=242193529>
+##contig=<ID=chr19,length=58617616>
+##contig=<ID=chrX,length=156040895>
+##contig=<ID=chrY,length=57227415>
+##contig=<ID=chrM,length=16569>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	GSYNTH
+chr19	44900000	.	A	<NON_REF>	.	.	END=44908683	GT:DP:GQ:MIN_DP	0/0:30:60:25
+chr19	44908684	.	T	C,<NON_REF>	60	.	.	GT:DP:GQ	0/1:31:60
+chr19	44908685	.	G	<NON_REF>	.	.	END=44910000	GT:DP:GQ:MIN_DP	0/0:28:60:20
+chr1	11794419	.	T	G,<NON_REF>	55	.	.	GT:DP:GQ	1/1:22:50

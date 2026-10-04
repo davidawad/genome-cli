@@ -1,0 +1,5 @@
+# fsqlite 0.4.x uses `#![feature(core_intrinsics)]` on x86_64, so a nightly toolchain is required.
+[toolchain]
+channel = "nightly"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

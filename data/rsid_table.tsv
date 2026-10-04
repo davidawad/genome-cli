@@ -1,0 +1,14 @@
+# genome-cli curated rsid coordinate table.
+# Positions are 1-based; alleles are on the + strand of each build.
+# Verified 2026-10-03 against Ensembl REST (rest.ensembl.org for GRCh38,
+# grch37.rest.ensembl.org for GRCh37) and NCBI dbSNP (api.ncbi.nlm.nih.gov/variation/v0/refsnp/<id>);
+# both sources agreed on every row. Note rs6025: the GRCh37 reference carries T, GRCh38 carries C.
+rsid	gene	chrom	grch37_pos	grch37_ref	grch37_alt	grch38_pos	grch38_ref	grch38_alt	source
+rs429358	APOE	19	45411941	T	C	44908684	T	C	https://www.ncbi.nlm.nih.gov/snp/rs429358 ; https://rest.ensembl.org/variation/human/rs429358 ; https://grch37.rest.ensembl.org/variation/human/rs429358
+rs7412	APOE	19	45412079	C	T	44908822	C	T	https://www.ncbi.nlm.nih.gov/snp/rs7412 ; https://rest.ensembl.org/variation/human/rs7412 ; https://grch37.rest.ensembl.org/variation/human/rs7412
+rs1801133	MTHFR	1	11856378	G	A,C	11796321	G	A,C	https://www.ncbi.nlm.nih.gov/snp/rs1801133 ; https://rest.ensembl.org/variation/human/rs1801133 ; https://grch37.rest.ensembl.org/variation/human/rs1801133
+rs1801131	MTHFR	1	11854476	T	G	11794419	T	G	https://www.ncbi.nlm.nih.gov/snp/rs1801131 ; https://rest.ensembl.org/variation/human/rs1801131 ; https://grch37.rest.ensembl.org/variation/human/rs1801131
+rs6025	F5	1	169519049	T	C,A	169549811	C	T,A	https://www.ncbi.nlm.nih.gov/snp/rs6025 ; https://rest.ensembl.org/variation/human/rs6025 ; https://grch37.rest.ensembl.org/variation/human/rs6025
+rs1800562	HFE	6	26093141	G	A	26092913	G	A	https://www.ncbi.nlm.nih.gov/snp/rs1800562 ; https://rest.ensembl.org/variation/human/rs1800562 ; https://grch37.rest.ensembl.org/variation/human/rs1800562
+rs4988235	MCM6/LCT	2	136608646	G	A,C,T	135851076	G	A,C,T	https://www.ncbi.nlm.nih.gov/snp/rs4988235 ; https://rest.ensembl.org/variation/human/rs4988235 ; https://grch37.rest.ensembl.org/variation/human/rs4988235
+rs4244285	CYP2C19	10	96541616	G	A,C,T	94781859	G	A,C,T	https://www.ncbi.nlm.nih.gov/snp/rs4244285 ; https://rest.ensembl.org/variation/human/rs4244285 ; https://grch37.rest.ensembl.org/variation/human/rs4244285
