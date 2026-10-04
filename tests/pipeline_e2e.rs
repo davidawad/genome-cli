@@ -29,7 +29,8 @@ impl Rng {
 const BASES: [u8; 4] = *b"ACGT";
 
 fn which(tool: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(tool).is_file()))
+    let exe = format!("{tool}{}", std::env::consts::EXE_SUFFIX);
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(&exe).is_file()))
 }
 
 fn revcomp(s: &[u8]) -> Vec<u8> {
@@ -171,7 +172,10 @@ fn assert_snp_called(row: &Value, (pos, r, alt, hom): &Snp) {
 fn fastq_to_kit_with_real_tools() {
     let missing: Vec<&str> = ["minimap2", "samtools", "bcftools"].into_iter().filter(|t| !which(t)).collect();
     if !missing.is_empty() {
-        eprintln!("SKIPPED pipeline e2e: missing {} on PATH (see `genome doctor`)", missing.join(", "));
+        eprintln!(
+            "SKIPPED pipeline e2e: missing {} on PATH (see `genome doctor`; on Windows run it under WSL)",
+            missing.join(", ")
+        );
         return;
     }
     let dir = tempfile::tempdir().unwrap();

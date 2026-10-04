@@ -1,0 +1,107 @@
+# Prebuilt `genome` binaries for every supported platform, on tag push (v*).
+#
+# Each archive holds the binary, README.md and LICENSE:
+#   genome-<tag>-<target>.tar.gz   (Linux, macOS)
+#   genome-<tag>-<target>.zip      (Windows)
+# plus `<archive>.sha256` and one combined SHA256SUMS, attached to a GitHub
+# release. Users and the Homebrew formula therefore need no Rust toolchain.
+# Toolchains as in ci.yml: nightly on x86_64 and Windows, stable on aarch64.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04 images keep the glibc floor at 2.35.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04, toolchain: nightly }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm, toolchain: stable }
+          - { target: aarch64-apple-darwin, os: macos-latest, toolchain: stable }
+          # Cross-compiled on Apple Silicon (the SDK covers both architectures).
+          - { target: x86_64-apple-darwin, os: macos-latest, toolchain: nightly }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, toolchain: nightly }
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Install Rust ${{ matrix.toolchain }} (${{ matrix.target }})
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="genome-${TAG}-${{ matrix.target }}"
+          bin="target/${{ matrix.target }}/release/genome"
+          [[ "${{ matrix.target }}" == *windows* ]] && bin="$bin.exe"
+          if [[ "${{ matrix.target }}" != x86_64-apple-darwin ]]; then
+            "$bin" --version
+          fi
+          mkdir -p "dist/$name"
+          cp "$bin" README.md LICENSE "dist/$name/"
+          cd dist
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            archive="$name.zip"
+            7z a -tzip "$archive" "$name" >/dev/null
+          else
+            archive="$name.tar.gz"
+            tar czf "$archive" "$name"
+          fi
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$archive" >"$archive.sha256"
+          else
+            shasum -a 256 "$archive" >"$archive.sha256"
+          fi
+          cat "$archive.sha256"
+          rm -rf "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        run: cd dist && cat *.sha256 | sort -k2 >SHA256SUMS && cat SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/* --title "$TAG" --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"
+          fi

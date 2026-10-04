@@ -190,7 +190,7 @@ fn rekey(ctx: &Ctx, kek: Option<&str>) -> Result<()> {
     drop(d);
     if let (KekKind::Keyring, Some(acct)) = (old.kek, old.keyring_account.as_deref()) {
         if new.keyring_account.as_deref() != Some(acct) {
-            let _ = crate::keys::keyring_delete(acct);
+            let _ = crate::platform::keystore::delete(acct);
         }
     }
     if old.kek == KekKind::Passphrase {

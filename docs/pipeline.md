@@ -56,10 +56,47 @@ skipped, and creates nothing.
 ~11 GB RAM and a few minutes for GRCh38; for even smaller tests pass
 `--reference` with a small FASTA).
 
+## Platforms
+
+Tools are looked up on `PATH` with the OS's rules (the `which` crate, so
+`.exe`/`PATHEXT` on Windows) and spawned by full path. `genome doctor` lists
+them with an install hint for your OS (Homebrew on macOS, apt or bioconda on
+Linux, WSL on Windows).
+
+| | Linux | macOS | Windows, native | Windows, WSL 2 |
+|---|---|---|---|---|
+| `pipeline plan` | yes | yes | yes | yes |
+| `pipeline run` (minimap2/bwa-mem2, samtools, bcftools) | yes | yes | no (see below) | yes |
+| `--caller deepvariant` | docker or podman | Docker Desktop or `podman machine` | no (see below) | yes, Docker Desktop's WSL integration or podman inside WSL |
+| every other command (`import`, `lookup`, `compare`, `export`, `liftover`, `db`, ...) | yes | yes | yes | yes |
+
+### Windows
+
+minimap2, bwa-mem2, samtools and bcftools have no maintained native Windows
+builds (bioconda only targets Linux and macOS). If you put Windows builds on
+`PATH` yourself (e.g. from MSYS2), genome-cli finds and runs them, but that is
+untested. DeepVariant needs Unix-style bind mounts (`-v /path:/path`), which
+`C:\...` paths break. So run the pipeline inside **WSL 2** with the Linux
+binary:
+
+```sh
+wsl --install -d Ubuntu                      # once, from PowerShell
+# inside WSL:
+sudo apt install minimap2 samtools bcftools
+# install the Linux genome binary (README "Install"), then:
+genome pipeline run reads/*.fastq.gz --out run1 --region chr19:44.9M-45.0M
+```
+
+The WSL `genome` keeps its own data directory (`~/.local/share/genome-cli`
+inside WSL), separate from the Windows one (`%LOCALAPPDATA%\genome-cli\data`).
+To import the result into the Windows-side database instead, run the
+pipeline with `--no-import` and then, from Windows,
+`genome import \\wsl$\Ubuntu\home\<you>\run1\<sample>.vcf.gz`.
+
 ## Tests
 
 `tests/pipeline_e2e.rs` simulates a few thousand read pairs (Rust, no wgsim
 needed) from a synthetic 20 kb reference with known heterozygous and
 homozygous SNPs, runs the real pipeline when minimap2, samtools and bcftools
 are on PATH, and checks the imported kit reports the planted genotypes. It
-prints a skip message otherwise.
+prints a `SKIPPED` message otherwise (always, on native Windows).

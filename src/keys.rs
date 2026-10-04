@@ -4,8 +4,8 @@
 //!
 //! KEK sources:
 //! - `keyring`: a random 256-bit KEK kept in the OS credential store (macOS
-//!   Keychain via the Security framework, Secret Service on Linux), via the
-//!   `keyring` crate.
+//!   Keychain, Secret Service on Linux, Windows Credential Manager); see
+//!   [`crate::platform::keystore`].
 //! - `passphrase`: Argon2id(passphrase, salt). The passphrase comes from a
 //!   session entry cached by `genome db unlock`, then `GENOME_KEY` (CI), then an
 //!   interactive prompt.
@@ -17,11 +17,11 @@ use zeroize::Zeroizing;
 
 use crate::crypto::{self, hex, unhex, KdfParams, Key};
 use crate::error::{AppError, ErrorKind, Result};
+use crate::platform::keystore::{self, SERVICE as KEYRING_SERVICE};
 
 pub const KEY_ENV: &str = "GENOME_KEY";
 pub const NEW_KEY_ENV: &str = "GENOME_NEW_KEY";
 pub const EXPORT_KEY_ENV: &str = "GENOME_EXPORT_KEY";
-const KEYRING_SERVICE: &str = "genome-cli";
 pub const CIPHER: &str = "xchacha20poly1305";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,35 +104,6 @@ pub fn passphrase(env_var: &str, prompt: &str, confirm: bool) -> Result<Zeroizin
     Ok(p)
 }
 
-fn keyring_entry(account: &str) -> Result<keyring::Entry> {
-    keyring::Entry::new(KEYRING_SERVICE, account).map_err(|e| crypto_err(format!("OS keyring: {e}")))
-}
-
-fn keyring_get(account: &str) -> Result<Option<Key>> {
-    match keyring_entry(account)?.get_secret() {
-        Ok(s) => Key::from_bytes(&Zeroizing::new(s)).map(Some),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(crypto_err(format!("OS keyring: {e}"))),
-    }
-}
-
-fn keyring_set(account: &str, key: &Key) -> Result<()> {
-    keyring_entry(account)?.set_secret(key.bytes()).map_err(|e| crypto_err(format!("OS keyring: {e}")))?;
-    // Read back: some backends accept writes they cannot persist.
-    match keyring_get(account)? {
-        Some(k) if k.bytes() == key.bytes() => Ok(()),
-        _ => Err(crypto_err("OS keyring did not store the key")),
-    }
-}
-
-pub fn keyring_delete(account: &str) -> Result<bool> {
-    match keyring_entry(account)?.delete_credential() {
-        Ok(()) => Ok(true),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(e) => Err(crypto_err(format!("OS keyring: {e}"))),
-    }
-}
-
 fn session_account(db_id: &str) -> String {
     format!("session:{db_id}")
 }
@@ -165,15 +136,19 @@ fn new_kek(pref: &str, db_id: &str, pass_env: &str) -> Result<NewKek> {
     let from_keyring = || -> Result<NewKek> {
         let kek = Key::random()?;
         let account = format!("db:{db_id}");
-        keyring_set(&account, &kek)?;
+        keystore::set(&account, &kek)?;
         Ok(NewKek { kek, kind: KekKind::Keyring, kdf: None, account: Some(account) })
     };
     match pref {
         "passphrase" => from_pass(),
         "keyring" => from_keyring(),
         _ if std::env::var_os(pass_env).is_some() => from_pass(),
-        _ => from_keyring()
-            .or_else(|e| from_pass().map_err(|pe| crypto_err(format!("no key source available ({e}; {pe})")))),
+        _ => from_keyring().or_else(|e| {
+            if std::io::stdin().is_terminal() {
+                eprintln!("genome: {}; using a passphrase instead", e.message);
+            }
+            from_pass().map_err(|pe| crypto_err(format!("no key source available ({e}; {pe})")))
+        }),
     }
 }
 
@@ -234,7 +209,7 @@ impl Envelope {
         match self.kek {
             KekKind::Keyring => {
                 let account = self.keyring_account.as_deref().unwrap_or_default();
-                let kek = keyring_get(account)?.ok_or_else(|| {
+                let kek = keystore::get(account)?.ok_or_else(|| {
                     crypto_err(format!("OS keyring has no entry '{KEYRING_SERVICE}/{account}' for this database"))
                 })?;
                 self.unwrap_with(&kek)
@@ -242,7 +217,7 @@ impl Envelope {
             KekKind::Passphrase => {
                 // A session cached by `db unlock` (only when no explicit env key is given).
                 if std::env::var_os(KEY_ENV).is_none() {
-                    if let Ok(Some(kek)) = keyring_get(&session_account(&self.db_id)) {
+                    if let Ok(Some(kek)) = keystore::get(&session_account(&self.db_id)) {
                         if let Ok(dek) = self.unwrap_with(&kek) {
                             return Ok(dek);
                         }
@@ -262,12 +237,12 @@ impl Envelope {
         let pass = passphrase(KEY_ENV, "Database passphrase: ", false)?;
         let kek = self.passphrase_kek(&pass)?;
         self.unwrap_with(&kek)?;
-        keyring_set(&session_account(&self.db_id), &kek)
+        keystore::set(&session_account(&self.db_id), &kek)
     }
 
     /// Remove a cached session (`db lock`). Returns whether one existed.
     pub fn clear_session(&self) -> Result<bool> {
-        keyring_delete(&session_account(&self.db_id))
+        keystore::delete(&session_account(&self.db_id))
     }
 }
 

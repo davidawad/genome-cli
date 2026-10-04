@@ -75,9 +75,10 @@ pub fn flag_layer(g: &GlobalOpts) -> Layer {
 }
 
 pub fn expand_tilde(p: &str) -> String {
-    match (p.strip_prefix("~/"), std::env::var("HOME")) {
-        (Some(rest), Ok(home)) => format!("{home}/{rest}"),
-        _ => p.to_string(),
+    let rest = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\").filter(|_| cfg!(windows)));
+    match rest {
+        Some(rest) => crate::platform::dirs::home().join(rest).to_string_lossy().into_owned(),
+        None => p.to_string(),
     }
 }
 

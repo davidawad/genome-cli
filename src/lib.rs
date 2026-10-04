@@ -20,6 +20,7 @@ pub mod model;
 pub mod output;
 pub mod parse;
 pub mod pipeline;
+pub mod platform;
 pub mod rsids;
 pub mod store;
 pub mod summary;

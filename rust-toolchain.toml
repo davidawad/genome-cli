@@ -1,4 +1,11 @@
-# fsqlite 0.4.x uses `#![feature(core_intrinsics)]` on x86_64, so a nightly toolchain is required.
+# fsqlite 0.4.x (latest: 0.4.9) enables nightly-only features, gated on the target:
+#   - x86_64:  `#![feature(core_intrinsics)]` in fsqlite-pager and fsqlite-btree
+#              (for `core::intrinsics::prefetch_read_data`)
+#   - Windows: `#![feature(windows_by_handle)]` in fsqlite-vfs
+# No cargo feature turns these off, so x86_64 Linux/macOS and Windows need nightly.
+# aarch64 Linux and macOS build on stable; this file cannot be made per-target, so
+# override it there with `RUSTUP_TOOLCHAIN=stable` / `cargo +stable` (CI and the
+# release workflow do; Homebrew's cargo ignores this file). See README "Building".
 [toolchain]
 channel = "nightly"
 components = ["clippy", "rustfmt"]

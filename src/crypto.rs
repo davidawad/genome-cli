@@ -193,7 +193,8 @@ pub struct SealedWriter {
 impl SealedWriter {
     pub fn create(path: &Path, key: &Key, label: &str) -> Result<Self> {
         let tmp = tmp_path(path);
-        let f = File::create(&tmp).map_err(|e| AppError::io(format!("{}: {e}", tmp.display())))?;
+        let f = crate::platform::perms::create_private(&tmp)
+            .map_err(|e| AppError::io(format!("{}: {e}", tmp.display())))?;
         let mut header = [0u8; HEADER_LEN];
         header[0..8].copy_from_slice(SEAL_MAGIC);
         header[8..12].copy_from_slice(&(CHUNK as u32).to_le_bytes());

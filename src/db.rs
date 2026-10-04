@@ -90,7 +90,7 @@ fn create_parent(path: &Path) -> Result<()> {
 }
 
 /// Exclusive advisory lock serializing writers of one sealed database.
-fn lock_file(path: &Path) -> Result<std::fs::File> {
+pub fn lock_file(path: &Path) -> Result<std::fs::File> {
     let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
     name.push(".lock");
     let lp = path.with_file_name(name);
@@ -362,7 +362,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let tmp = crypto::tmp_path(path);
     let res = (|| {
-        let mut f = std::fs::File::create(&tmp)?;
+        let mut f = crate::platform::perms::create_private(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
         std::fs::rename(&tmp, path)

@@ -1,0 +1,5 @@
+# Keep LF on every OS (Windows checkouts default to core.autocrlf=true):
+# fixtures, README samples and scripts are compared byte for byte.
+* text=auto eol=lf
+*.gz binary
+*.svg text eol=lf
