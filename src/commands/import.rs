@@ -77,11 +77,21 @@ pub fn run(ctx: &Ctx, a: ImportArgs) -> Result<Kit> {
         let ref_calls = a.ref_calls.clone().unwrap_or_else(|| {
             match (assay.as_str(), info.source_format.as_str()) {
                 ("array", _) | (_, "gvcf") => "explicit",
+                // Our own pipeline calls variants only (`bcftools call -v`), often on a
+                // region or a read subsample: an absent site may simply be uncovered.
+                _ if a.fastq_derived => "unknown",
                 ("wgs", _) => "absent-means-ref",
                 _ => "unknown",
             }
             .to_string()
         });
+        if a.fastq_derived && a.ref_calls.is_none() && info.source_format != "gvcf" {
+            warnings.push(
+                "fastq-derived variant-only calls: absent sites are not assumed homozygous reference \
+                 (coverage unknown); pass --ref-calls absent-means-ref for a full-depth whole-genome run"
+                    .to_string(),
+            );
+        }
         let records = sites.len() as i64;
         let summary = crate::summary::summarize(&id, &sites, &contigs, build, &assay, &ref_calls, &info.source_format);
         let kit = Kit {
