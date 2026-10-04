@@ -190,7 +190,8 @@ fn fastq_to_kit_with_real_tools() {
         serde_json::from_slice(&o.stdout).unwrap()
     };
     assert_eq!(kits["data"][0]["source_format"], "fastq-derived");
-    assert_eq!(kits["data"][0]["ref_calls"], "absent-means-ref");
+    // Our variant-only, possibly region/subsample-limited calls never imply hom-ref.
+    assert_eq!(kits["data"][0]["ref_calls"], "unknown");
     for (pos, r, alt, hom) in &snps {
         let v = lookup(&format!("chr22:{pos}"));
         let row = &v["data"][0];
@@ -203,7 +204,7 @@ fn fastq_to_kit_with_real_tools() {
         got.sort_unstable();
         assert_eq!(got, expect, "SNP at {pos}");
     }
-    // A site between SNPs is inferred reference.
+    // A site between SNPs is not claimed as reference: coverage is unknown.
     let v = lookup("chr22:1000");
-    assert_eq!(v["data"][0]["call_source"], "inferred_ref");
+    assert_eq!(v["data"][0]["call_source"], "missing");
 }
