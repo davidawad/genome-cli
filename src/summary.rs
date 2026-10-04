@@ -31,6 +31,89 @@ struct Counts {
     y_called: u64,
 }
 
+impl Counts {
+    /// Count one site: zygosity, reference blocks, and the non-PAR X / Y tallies for sex.
+    fn add(&mut self, s: &Site, build: Build) {
+        let z = s.zygosity();
+        match z {
+            Zygosity::NoCall => self.no_calls += 1,
+            Zygosity::Het => self.het += 1,
+            Zygosity::HomRef => self.hom_ref += 1,
+            Zygosity::HomAlt => self.hom_alt += 1,
+            Zygosity::Hom => self.hom += 1,
+            Zygosity::Hemi => self.hemi += 1,
+        }
+        let block = s.is_ref_block();
+        self.ref_blocks += u64::from(block);
+        let called = z != Zygosity::NoCall;
+        match s.contig {
+            23 if !block && !build.in_par("X", s.pos) => {
+                self.x_called += u64::from(called);
+                self.x_het += u64::from(z == Zygosity::Het);
+            }
+            24 if !block => {
+                self.y_total += 1;
+                self.y_called += u64::from(called);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Per-chromosome counts for the primary contigs; everything else folds into `other_contigs`.
+fn fold_chroms(chrom_counts: &[u64], contigs: &[String]) -> Map<String, Value> {
+    let mut by_chrom: Map<String, Value> = by_chrom_keys().into_iter().map(|k| (k, Value::from(0u64))).collect();
+    let mut other = 0;
+    for (i, n) in chrom_counts.iter().enumerate().filter(|(_, n)| **n > 0) {
+        let name = contigs.get(i).map(String::as_str).unwrap_or("");
+        if is_primary(name) {
+            by_chrom.insert(name.to_string(), Value::from(*n));
+        } else {
+            other += n;
+        }
+    }
+    by_chrom.insert("other_contigs".into(), Value::from(other));
+    by_chrom
+}
+
+fn ref_calls_caveat(ref_calls: &str, source_format: &str) -> Option<String> {
+    match ref_calls {
+        "absent-means-ref" => Some(
+            "variant-only VCF: hom_ref counts explicit records only; sites absent from the file are implied homozygous reference"
+                .into(),
+        ),
+        "explicit" if source_format == "gvcf" => {
+            Some("gVCF: hom_ref includes reference blocks (counted per record, not per base)".into())
+        }
+        _ => None,
+    }
+}
+
+fn caveats(c: &Counts, sex: &Sex, build: Build, assay: &str, ref_calls: &str, source_format: &str) -> Vec<String> {
+    let mut caveats: Vec<String> = ref_calls_caveat(ref_calls, source_format).into_iter().collect();
+    if assay == "array" {
+        caveats.push(
+            "array export: only pre-selected SNPs were genotyped; sites not listed are unknown, not reference".into(),
+        );
+    }
+    if assay == "array" && c.hom > 0 {
+        caveats.push(format!(
+            "array exports carry no reference allele: {} homozygous calls without a coordinate-table entry are counted as hom_unknown_ref",
+            c.hom
+        ));
+    }
+    if build == Build::Unknown {
+        caveats.push("genome build unknown: PAR exclusion and liftover are disabled".into());
+    }
+    if sex.call == "uncertain" {
+        caveats.push(format!(
+            "sex inference uncertain (x_het_rate {}, y_call_rate {}, {} non-PAR X sites)",
+            sex.x_het_rate, sex.y_call_rate, sex.x_sites
+        ));
+    }
+    caveats
+}
+
 /// Infer chromosomal sex from non-PAR X heterozygosity and Y calls.
 pub fn infer_sex(assay: &str, x_called: u64, x_het: u64, y_total: u64, y_called: u64) -> Sex {
     let x_het_rate = if x_called > 0 { x_het as f64 / x_called as f64 } else { 0.0 };

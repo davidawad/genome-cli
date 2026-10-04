@@ -210,7 +210,14 @@ fn lookup_by_rsid_on_array() {
     // Reference allele from the curated table resolves hom_ref.
     assert_eq!(d[1]["zygosity"], "hom_ref");
     assert_eq!(d[2]["genotype"], "AG");
-    let keys: Vec<&str> = d[0].as_object().unwrap().keys().map(String::as_str).collect();
+}
+
+#[test]
+fn lookup_row_keys_follow_the_contract() {
+    let e = Env::new();
+    e.import("23andme_male.txt", "m");
+    let v = e.json(&["lookup", "m", "--rsid", "rs429358"]);
+    let keys: Vec<&str> = v["data"][0].as_object().unwrap().keys().map(String::as_str).collect();
     assert_eq!(
         keys,
         [
