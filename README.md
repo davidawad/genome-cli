@@ -22,6 +22,15 @@ letters on the + strand, zygosity and a `call_source` (`observed`,
 `inferred_ref`, `missing`) that makes each kit's "what does absence mean"
 semantics (`ref_calls`) explicit. Details: [docs/formats.md](docs/formats.md).
 
+## Tested on real data
+
+Tested against real 23andMe v5 exports and whole-genome VCF/FASTQ from a commercial WGS provider.
+
+A partial-depth or region-limited FASTQ run is only a tooling check; genotype
+quality needs all lanes (full ~30x depth). FASTQ-derived variant-only kits are
+imported with `ref_calls: unknown`, so an uncovered site is never reported as
+reference.
+
 ## Quick start
 
 ```sh
