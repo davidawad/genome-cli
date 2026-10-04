@@ -152,6 +152,113 @@ quality needs all lanes (full ~30x depth). FASTQ-derived variant-only kits are
 imported with `ref_calls: unknown`, so an uncovered site is never reported as
 reference.
 
+## Install
+
+Linux (x86_64, aarch64), macOS (Apple Silicon, Intel) and Windows (x86_64)
+are supported; CI (`.github/workflows/ci.yml`) runs fmt, clippy and the full
+test suite on all five.
+
+**Prebuilt binaries** (no Rust toolchain needed). Every `v*` tag builds
+`genome` for the five targets (`.github/workflows/release.yml`) and attaches
+them to a GitHub release on the mirror (`github.com/davidawad/genome-cli`),
+each with a `.sha256` file plus one combined `SHA256SUMS`:
+
+| platform | archive |
+|---|---|
+| Linux x86_64 (glibc ≥ 2.35) | `genome-<tag>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux aarch64 (glibc ≥ 2.35) | `genome-<tag>-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Apple Silicon | `genome-<tag>-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `genome-<tag>-x86_64-apple-darwin.tar.gz` |
+| Windows x86_64 | `genome-<tag>-x86_64-pc-windows-msvc.zip` |
+
+```sh
+# Linux / macOS
+tag=v0.2.0 target=aarch64-apple-darwin   # pick your row above
+base=https://github.com/davidawad/genome-cli/releases/download/$tag
+curl -LO "$base/genome-$tag-$target.tar.gz" -LO "$base/genome-$tag-$target.tar.gz.sha256"
+shasum -a 256 -c "genome-$tag-$target.tar.gz.sha256"     # or sha256sum -c
+tar xzf "genome-$tag-$target.tar.gz"
+install -m 755 "genome-$tag-$target/genome" ~/.local/bin/  # or /usr/local/bin
+```
+
+```powershell
+# Windows (PowerShell)
+$tag = "v0.2.0"; $name = "genome-$tag-x86_64-pc-windows-msvc"
+$base = "https://github.com/davidawad/genome-cli/releases/download/$tag"
+Invoke-WebRequest "$base/$name.zip" -OutFile "$name.zip"
+Invoke-WebRequest "$base/$name.zip.sha256" -OutFile "$name.zip.sha256"
+(Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() -eq (Get-Content "$name.zip.sha256").Split(" ")[0]
+Expand-Archive "$name.zip" -DestinationPath .
+# then put $name\genome.exe on PATH, e.g. in $env:LOCALAPPDATA\Programs\genome
+```
+
+macOS may quarantine a downloaded binary; `xattr -d com.apple.quarantine genome`
+clears it (Homebrew does this for you).
+
+**Homebrew** (macOS, Linux): `brew install OWNER/TAP/genome-cli`, from the
+separate tap (substitute its name). The formula currently builds from source
+with `depends_on arch: :arm64`, because Homebrew's cargo is stable and stable
+cannot build fsqlite on x86_64 (see [Building](#building)). It should switch to
+the release archives, which removes both the Rust build dependency and the
+architecture restriction; the tap lives elsewhere and is not changed here:
+
+```ruby
+class GenomeCli < Formula
+  desc "Personal genomic data (array exports, WGS VCFs, FASTQ) in one genotype model"
+  homepage "https://gitlab.com/davidawad/genome-cli"
+  version "0.2.0"
+  license "MIT"
+  base = "https://github.com/davidawad/genome-cli/releases/download/v#{version}/genome-v#{version}"
+
+  on_macos do
+    on_arm do
+      url "#{base}-aarch64-apple-darwin.tar.gz"
+      sha256 "<from genome-v0.2.0-aarch64-apple-darwin.tar.gz.sha256>"
+    end
+    on_intel do
+      url "#{base}-x86_64-apple-darwin.tar.gz"
+      sha256 "<from ...x86_64-apple-darwin.tar.gz.sha256>"
+    end
+  end
+  on_linux do
+    on_arm do
+      url "#{base}-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "<from ...aarch64-unknown-linux-gnu.tar.gz.sha256>"
+    end
+    on_intel do
+      url "#{base}-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "<from ...x86_64-unknown-linux-gnu.tar.gz.sha256>"
+    end
+  end
+
+  def install
+    bin.install "genome"
+    generate_completions_from_executable(bin/"genome", "completions")
+    system bin/"genome", "man", "--dir", man1
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/genome --version")
+  end
+end
+```
+
+Drop `depends_on arch: :arm64` and `depends_on "rust" => :build`; on each
+release, copy the four `sha256` values from `SHA256SUMS` (`brew bump-formula-pr`
+does not handle per-arch URLs, so edit them by hand or with a small script).
+
+**cargo install** (from source): x86_64 and Windows need a nightly toolchain,
+aarch64 builds on stable (see [Building](#building)).
+
+```sh
+cargo +nightly install --locked --git https://gitlab.com/davidawad/genome-cli   # x86_64 Linux/macOS, Windows
+cargo install --locked --git https://gitlab.com/davidawad/genome-cli            # aarch64 Linux/macOS
+```
+
+The FASTQ pipeline additionally needs minimap2, samtools and bcftools, which
+have no native Windows builds: use WSL there (see
+[docs/pipeline.md](docs/pipeline.md#windows)). Everything else runs natively.
+
 ## Quick start
 
 ```sh
@@ -186,7 +293,7 @@ selects `vcf|tsv|json`.
 | `compare A B [--max-discordant N] [--region]` | concordance on overlapping sites, B lifted to A's build |
 | `export KIT --format vcf\|tsv\|json [--region ...]` | |
 | `pipeline plan\|run FASTQ... --out DIR [--reference GRCh38\|FASTA] [--region] [--max-reads] [--threads] [--caller bcftools\|deepvariant] [--aligner minimap2\|bwa-mem2]` | FASTQ -> VCF -> kit; see [docs/pipeline.md](docs/pipeline.md) |
-| `doctor` | external tools (with `brew install` hints), cached chains/reference/dbSNP, encryption status |
+| `doctor` | external tools (with per-OS install hints), cached chains/reference/dbSNP, encryption status, key storage backend, data_dir permissions |
 | `db init\|encrypt\|rekey\|unlock\|lock\|status` | encryption at rest (on by default); see [docs/security.md](docs/security.md) |
 | `audit log [--limit N]` | verified, encrypted audit trail of commands touching personal data (counts only, no values) |
 | `decrypt FILE` | read back `--encrypt-output` exports and `pipeline run --seal` outputs |
@@ -209,16 +316,16 @@ The index (sorted by rsid and by position, 12 bytes/record) lives in
 
 ## Configuration
 
-Layers, lowest to highest: built-in defaults < `~/.config/genome-cli/config.toml`
-(or `$XDG_CONFIG_HOME`, `--config`, `GENOME_CONFIG`) < `GENOME_*` environment
+Layers, lowest to highest: built-in defaults < `config.toml` in the config
+directory below (or `--config`, `GENOME_CONFIG`) < `GENOME_*` environment
 variables < flags. `genome config show --effective` prints every value with
 its source; `genome config keys` lists keys and env names.
 
 | key | env | default |
 |---|---|---|
-| `data_dir` | `GENOME_DATA_DIR` | `~/.local/share/genome-cli` |
+| `data_dir` | `GENOME_DATA_DIR` | see [Default locations](#default-locations) |
 | `db_path` | `GENOME_DB` | `<data_dir>/genome.db` |
-| `cache_dir` | `GENOME_CACHE_DIR` | `~/.cache/genome-cli` |
+| `cache_dir` | `GENOME_CACHE_DIR` | see [Default locations](#default-locations) |
 | `format`, `color`, `precision`, `csv_delimiter`, `csv_header`, `null` | `GENOME_FORMAT`, ... | `table`, `auto`, 3, `,`, true, empty |
 | `max_discordant` | `GENOME_MAX_DISCORDANT` | 50 |
 | `threads`, `aligner`, `caller`, `container`, `reference` | `GENOME_THREADS`, ... | 4, `minimap2`, `bcftools`, `auto`, `GRCh38` |
@@ -227,6 +334,31 @@ its source; `genome config keys` lists keys and env names.
 | `kek` | `GENOME_KEK` | `auto`: key source for new encrypted databases (`GENOME_KEY`, else OS keyring, else prompt) |
 | `insecure_plaintext` | `GENOME_INSECURE_PLAINTEXT` | false; store data unencrypted (warns every run) |
 
+### Default locations
+
+Each OS's conventions (via the `directories` crate):
+
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| config | `~/.config/genome-cli/config.toml` | `~/Library/Application Support/genome-cli/config.toml` | `%APPDATA%\genome-cli\config.toml` |
+| data | `~/.local/share/genome-cli` | `~/Library/Application Support/genome-cli` | `%LOCALAPPDATA%\genome-cli\data` |
+| cache | `~/.cache/genome-cli` | `~/Library/Caches/genome-cli` | `%LOCALAPPDATA%\genome-cli\cache` |
+
+`XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` (absolute paths)
+override these on every OS; `GENOME_CONFIG`, `GENOME_DATA_DIR`, `GENOME_DB`
+and `GENOME_CACHE_DIR` override them in turn. **Upgrading on macOS:** 0.1 used
+`~/.config`, `~/.local/share` and `~/.cache` on macOS too. When the native
+location does not exist yet but the old one does, genome-cli keeps using the
+old one, so existing databases are found with no migration (`genome doctor`
+flags it on the `data_dir` row). To move, quit genome-cli and
+`mv ~/.local/share/genome-cli ~/Library/Application\ Support/genome-cli`
+(likewise `~/.config/genome-cli/config.toml` and `~/.cache/genome-cli` to
+`~/Library/Caches/genome-cli`).
+
+The data directory is owner-only: mode 0700 with 0600 files on Unix; on
+Windows a protected ACL granting only the current user full control,
+inherited by everything inside. `genome doctor` checks it (`permissions`).
+
 ## Encryption at rest
 
 Everything genome-cli writes under `data_dir` is encrypted by default with
@@ -234,8 +366,12 @@ XChaCha20-Poly1305: the kit database (a sealed container, loaded into an
 in-memory fsqlite database, so no plaintext WAL or journal ever exists), every
 genotype store (chunked AEAD, so lookups stay random-access) and an
 append-only, hash-chained audit log. A random per-database key is wrapped by a
-key from the macOS Keychain / Linux Secret Service, from `GENOME_KEY` (CI), or
-from an Argon2id passphrase prompt. Plaintext only with `--insecure-plaintext`.
+key from the OS credential store (macOS Keychain, Linux Secret Service,
+Windows Credential Manager), from `GENOME_KEY` (CI), or from an Argon2id
+passphrase prompt. Headless Linux (SSH sessions, servers, CI, containers)
+usually has no D-Bus session and so no Secret Service: genome-cli detects
+that up front and uses the passphrase (`GENOME_KEY` or the prompt) instead;
+`genome doctor` shows the backend in use or why there is none (`key storage`). Plaintext only with `--insecure-plaintext`.
 `--output` files with health data print a warning unless `--encrypt-output` is
 used. Threat model, formats, key handling, measured cost and the HIPAA note:
 [docs/security.md](docs/security.md). fsqlite's documented `PRAGMA
@@ -283,10 +419,28 @@ on stdout as `{"schema":"genome/v1","ok":false,"error":{"code":...,"message":...
 
 ## Building
 
-fsqlite 0.4.x uses `#![feature(core_intrinsics)]` on x86_64, so x86_64 needs
-a **nightly** toolchain; `rust-toolchain.toml` selects it automatically under
-rustup. On aarch64 (Apple Silicon) it builds on stable (e.g. Homebrew's
-cargo, which ignores the toolchain file).
+fsqlite 0.4.x (0.4.9 is the latest release) turns on nightly-only features
+per target, with no cargo feature to disable them:
+
+- x86_64: `#![feature(core_intrinsics)]` in `fsqlite-pager` and
+  `fsqlite-btree`, for `core::intrinsics::prefetch_read_data`;
+- Windows: `#![feature(windows_by_handle)]` in `fsqlite-vfs`.
+
+So x86_64 Linux/macOS and Windows need **nightly**, which
+`rust-toolchain.toml` selects automatically under rustup; aarch64 Linux and
+macOS build on **stable**. A toolchain file cannot vary by target, so on
+aarch64 override it if you want stable (`cargo +stable build`,
+`RUSTUP_TOOLCHAIN=stable`; Homebrew's cargo ignores the file). CI and the
+release workflow pick the toolchain per target the same way. Prebuilt
+release binaries need no toolchain at all.
+
+| target | toolchain | verified by |
+|---|---|---|
+| x86_64-unknown-linux-gnu | nightly | `just test-gate` locally, CI |
+| aarch64-unknown-linux-gnu | stable | CI |
+| aarch64-apple-darwin | stable | CI |
+| x86_64-apple-darwin | nightly | CI |
+| x86_64-pc-windows-msvc | nightly | CI |
 
 ```sh
 cargo build --release          # target/release/genome
@@ -302,8 +456,13 @@ tiny exports in each array format (male and female 23andMe), GRCh38 and
 GRCh37 VCFs with and without rsids and with alt/decoy/HLA/EBV contigs, a
 gVCF, and tiny chain files. `tests/pipeline_e2e.rs` simulates read pairs from
 a synthetic reference with planted SNPs and runs the real
-minimap2/samtools/bcftools pipeline when they are installed (it prints a skip
-message otherwise). No real person's genome is fetched or used.
+minimap2/samtools/bcftools pipeline when they are installed. Tests that need
+something absent print a `SKIPPED ...` line and pass: the pipeline e2e
+(tools missing, e.g. on Windows), the README sample check (needs bash and
+python3; Unix only) and the OS keyring round trip (runs only with
+`GENOME_TEST_KEYRING=1`, as in CI, and where a credential store is
+reachable). Everything else uses `GENOME_KEY`, never the OS keyring. No real
+person's genome is fetched or used.
 
 ## License
 

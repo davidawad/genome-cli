@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::error::{AppError, Result};
+use crate::platform::dirs::{Dir, CONFIG_FILE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -222,24 +223,16 @@ pub fn setting(key: &str) -> Option<&'static Setting> {
     SETTINGS.iter().find(|s| s.key == k)
 }
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
-}
-
-fn xdg(var: &str, fallback: &str) -> PathBuf {
-    std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| home().join(fallback))
-}
-
 pub fn default_config_path() -> PathBuf {
-    xdg("XDG_CONFIG_HOME", ".config").join("genome-cli").join("config.toml")
+    Dir::Config.resolve().join(CONFIG_FILE)
 }
 
 pub fn default_data_dir() -> PathBuf {
-    xdg("XDG_DATA_HOME", ".local/share").join("genome-cli")
+    Dir::Data.resolve()
 }
 
 pub fn default_cache_dir() -> PathBuf {
-    xdg("XDG_CACHE_HOME", ".cache").join("genome-cli")
+    Dir::Cache.resolve()
 }
 
 fn default_value(key: &str) -> String {
@@ -341,7 +334,7 @@ pub fn resolve_layers(layers: &[(Source, Layer)]) -> Result<BTreeMap<&'static st
     })
 }
 
-/// Locate the config file: `--config` > `GENOME_CONFIG` > XDG default.
+/// Locate the config file: `--config` > `GENOME_CONFIG` > the platform default.
 pub fn locate(flag: Option<&Path>) -> (PathBuf, Source) {
     flag.map(|p| (p.to_path_buf(), Source::Flag))
         .or_else(|| {

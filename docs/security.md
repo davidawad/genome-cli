@@ -174,11 +174,19 @@ envelope:
 
 KEK sources (the envelope records which one a database uses):
 
-1. **OS keyring** (`kek: keyring`): a random 256-bit KEK in the macOS
-   Keychain (Security framework, via the `keyring` crate's `apple-native`
-   backend) or the Linux Secret Service (GNOME Keyring/KWallet over D-Bus),
-   service `genome-cli`, account `db:<db_id>`. Nothing to type; the OS
-   protects it with your login.
+1. **OS keyring** (`kek: keyring`): a random 256-bit KEK in the OS
+   credential store, through one abstraction (`src/platform/keystore.rs`,
+   the `keyring` crate): the macOS Keychain (Security framework,
+   `apple-native`), the Linux Secret Service (GNOME Keyring, KWallet,
+   KeePassXC over the D-Bus session bus) or the Windows Credential Manager
+   (`windows-native`); service `genome-cli`, account `db:<db_id>`. Nothing to
+   type; the OS protects it with your login. Without a D-Bus session
+   (`DBUS_SESSION_BUS_ADDRESS` unset and no `$XDG_RUNTIME_DIR/bus`: SSH
+   sessions, servers, CI, containers) genome-cli treats the store as
+   unavailable without trying to connect, so `auto` falls back to a
+   passphrase (`GENOME_KEY` or the prompt) and `db unlock` sessions are not
+   available. `genome doctor` reports the backend (`key storage`) or the
+   reason there is none.
 2. **Environment** `GENOME_KEY`: a passphrase, for CI and scripts.
 3. **Interactive passphrase** (`kek: passphrase`), prompted without echo:
    KEK = Argon2id(passphrase, 16-byte random salt), m = 64 MiB, t = 3, p = 1.
@@ -241,8 +249,9 @@ real data.
 ## 4. Threat model
 
 **Protected (attacker gets the files at rest):** a stolen or lost laptop or
-disk, backups (Time Machine, cloud sync of `~/.local/share`), another local
-user reading your files, files copied off the machine. They get ciphertext;
+disk, backups (Time Machine, cloud sync of the data directory), another local
+user reading your files (the data directory is also owner-only: 0700 with
+0600 files on Unix, a protected current-user-only ACL on Windows), files copied off the machine. They get ciphertext;
 the passphrase is protected by Argon2id, and a keyring KEK by the OS.
 Integrity: any modification, truncation, reordering or swap of encrypted
 data is detected (except audit-log tail truncation, above).
@@ -264,7 +273,7 @@ data is detected (except audit-log tail truncation, above).
   `--encrypt-output` (warned), `decrypt -o`, `--insecure-plaintext`.
 - **Secure deletion.** "Overwrite then unlink" is best effort. SSD wear
   levelling, APFS/btrfs copy-on-write, snapshots and journals can keep old
-  blocks. Full-disk encryption (FileVault, LUKS) is the real answer for
+  blocks. Full-disk encryption (FileVault, LUKS, BitLocker) is the real answer for
   remnants and is recommended in addition.
 - **Metadata.** File sizes (≈ record counts), file times, the number of kits
   (directories) and the envelope (KDF parameters, KEK type) are visible.
@@ -275,7 +284,7 @@ data is detected (except audit-log tail truncation, above).
 **Access control** comes from the OS (file permissions, your login session
 and keyring) plus the key: without the KEK, no genome-cli command can read
 anything. The **audit trail** records who (`$USER`) ran which command on
-which kits and when.
+which kits and when (`$USER`, or `%USERNAME%` on Windows).
 
 ## 5. Performance
 

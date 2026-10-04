@@ -381,12 +381,19 @@ fn performance_smoke() {
     assert!(sealed.2 < plain.2 * 3 + std::time::Duration::from_secs(5), "export too slow: {sealed:?} vs {plain:?}");
 }
 
-#[cfg(unix)]
 #[test]
 fn data_dir_is_owner_only() {
-    use std::os::unix::fs::PermissionsExt;
     let e = Env::new();
     e.populate(&[]);
-    let mode = std::fs::metadata(e.path("data")).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o700, "data dir mode {mode:o}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: PathBuf| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(e.path("data")), 0o700, "data dir");
+        assert_eq!(mode(e.path("data/genome.db")), 0o600, "sealed database");
+    }
+    // The platform-aware check (protected current-user ACL on Windows), as doctor reports it.
+    let doctor: serde_json::Value = serde_json::from_str(&e.run(&["doctor", "--format", "json"]).0).unwrap();
+    let row = doctor["data"].as_array().unwrap().iter().find(|r| r["check"] == "permissions").unwrap();
+    assert_eq!(row["status"], "ok", "{row}");
 }

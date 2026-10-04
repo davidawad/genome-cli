@@ -26,7 +26,7 @@ pub struct Cli {
 
 #[derive(Debug, Clone, Args, Default)]
 pub struct GlobalOpts {
-    /// Config file (default: $XDG_CONFIG_HOME/genome-cli/config.toml; env GENOME_CONFIG)
+    /// Config file (default: genome-cli/config.toml in the OS config dir, see README; env GENOME_CONFIG)
     #[arg(long, global = true, value_name = "FILE")]
     pub config: Option<PathBuf>,
     /// Data directory for the kit database and genotype stores (env GENOME_DATA_DIR)

@@ -13,7 +13,7 @@
 //! reordering or editing any record (other than truncating the tail) fail
 //! verification. With `--insecure-plaintext` the log is `audit.jsonl`.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 
 use crate::crypto::{self, Key, TAG_LEN};
 use crate::error::{AppError, ErrorKind, Result};
+use crate::platform::perms::private_options;
 
 const MAGIC: &[u8; 8] = b"GNMAUDT1";
 const HEADER: u64 = 24;
@@ -46,21 +47,25 @@ fn entry(seq: u64, command: &str, details: Value) -> Value {
         "seq": seq,
         "ts": crate::util::now_iso(),
         "command": command,
-        "user": std::env::var("USER").ok(),
+        "user": std::env::var("USER").or_else(|_| std::env::var("USERNAME")).ok(),
         "details": details,
     })
 }
 
 /// Append one entry (sealed with `key`, or plaintext JSONL without one).
 pub fn append(data_dir: &Path, key: Option<&Key>, command: &str, details: Value) -> Result<()> {
-    crate::util::private_dir(data_dir)?;
+    crate::platform::perms::private_dir(data_dir)?;
     match key {
         Some(k) => append_sealed(&sealed_path(data_dir), k, command, details),
         None => {
             let p = plain_path(data_dir);
-            let mut f = OpenOptions::new().create(true).append(true).open(&p)?;
+            let mut f = private_options().create(true).read(true).append(true).open(&p)?;
             f.lock()?;
-            let seq = std::fs::read_to_string(&p).map(|s| s.lines().count() as u64).unwrap_or(0) + 1;
+            // Read through the locked handle: Windows locks are mandatory, so a
+            // second handle could not read the locked range.
+            let mut text = String::new();
+            f.read_to_string(&mut text)?;
+            let seq = text.lines().count() as u64 + 1;
             writeln!(f, "{}", entry(seq, command, details))?;
             f.sync_all()?;
             Ok(())
@@ -69,7 +74,7 @@ pub fn append(data_dir: &Path, key: Option<&Key>, command: &str, details: Value)
 }
 
 fn append_sealed(p: &Path, key: &Key, command: &str, details: Value) -> Result<()> {
-    let mut f = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(p)?;
+    let mut f = private_options().create(true).truncate(false).read(true).write(true).open(p)?;
     f.lock()?;
     let size = f.metadata()?.len();
     let mut header = [0u8; HEADER as usize];

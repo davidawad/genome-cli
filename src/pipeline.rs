@@ -19,6 +19,7 @@ use crate::context::Ctx;
 use crate::error::{AppError, Result};
 use crate::model::Region;
 use crate::output::{Record, Report};
+use crate::platform::exe::{install_hint, which};
 
 pub const GRCH38_NO_ALT_URL: &str = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/\
 seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz";
@@ -624,25 +625,6 @@ pub fn mark_cached(steps: &mut [Step], force: bool) {
     }
 }
 
-pub fn which(tool: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).map(|d| d.join(tool)).find(|p| p.is_file())
-}
-
-pub fn brew_hint(tool: &str) -> &'static str {
-    match tool {
-        "minimap2" => "brew install minimap2",
-        "bwa-mem2" => "brew install bwa-mem2",
-        "samtools" => "brew install samtools",
-        "bcftools" => "brew install bcftools",
-        "bgzip" | "tabix" => "brew install htslib",
-        "docker" => "brew install --cask docker",
-        "podman" => "brew install podman",
-        "wgsim" => "conda install -c bioconda wgsim (optional; tests simulate reads natively)",
-        _ => "see docs/pipeline.md",
-    }
-}
-
 fn head_reads(r1: &Path, r2: &Path, n: u64, o1: &Path, o2: &Path) -> Result<()> {
     for (src, dst) in [(r1, o1), (r2, o2)] {
         if let Some(p) = dst.parent() {
@@ -687,7 +669,8 @@ fn run_group(steps: &[Step], logs: &Path, idx: usize) -> Result<()> {
             }
         }
         let log = logs.join(format!("{:02}-{}-{}.log", idx + k, st.step, st.tool));
-        let mut cmd = Proc::new(&st.argv[0]);
+        // Resolve on PATH ourselves so Windows finds `.exe`/`PATHEXT` tools too.
+        let mut cmd = Proc::new(which(&st.argv[0]).unwrap_or_else(|| PathBuf::from(&st.argv[0])));
         cmd.args(&st.argv[1..]).stderr(File::create(&log)?);
         cmd.stdin(match prev_stdout.take() {
             Some(o) => Stdio::from(o),
@@ -699,7 +682,7 @@ fn run_group(steps: &[Step], logs: &Path, idx: usize) -> Result<()> {
             Stdio::from(File::create(log.with_extension("stdout"))?)
         });
         let mut child = cmd.spawn().map_err(|e| {
-            AppError::tool(format!("cannot run {}: {e} (install: {})", st.argv[0], brew_hint(&st.tool)))
+            AppError::tool(format!("cannot run {}: {e} (install: {})", st.argv[0], install_hint(&st.tool)))
         })?;
         prev_stdout = child.stdout.take();
         children.push((st, child, log));
@@ -804,7 +787,7 @@ pub fn run_cmd(ctx: &Ctx, cmd: PipelineCmd) -> Result<i32> {
             acc
         });
     for t in &missing {
-        warnings.push(format!("{t} not found on PATH (install: {})", brew_hint(t)));
+        warnings.push(format!("{t} not found on PATH (install: {})", install_hint(t)));
     }
     if !run {
         let rows = steps.iter().map(Step::record).collect();
