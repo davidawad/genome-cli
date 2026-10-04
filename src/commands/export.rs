@@ -94,13 +94,24 @@ pub fn run(ctx: &Ctx, a: ExportArgs, vcf: bool) -> Result<()> {
     if v.kit.absent_means_ref() {
         warnings.push("variant-only VCF kit: sites not exported are implied homozygous reference".to_string());
     }
-    let to_stdout = ctx.out.output.as_ref().is_none_or(|p| p.as_os_str() == "-");
-    let sink: Box<dyn Write> = if to_stdout {
-        Box::new(std::io::stdout().lock())
-    } else {
-        let p = ctx.out.output.as_ref().expect("checked");
-        Box::new(std::fs::File::create(p).map_err(|e| AppError::io(format!("{}: {e}", p.display())))?)
-    };
+    ctx.audit(
+        "export",
+        serde_json::json!({
+            "kit": id,
+            "records": calls.len(),
+            "format": if vcf { "vcf" } else { ctx.out.format.as_str() },
+            "destination": match (&ctx.out.output, ctx.encrypt_output) {
+                (_, true) => "encrypted",
+                (Some(p), false) if p.as_os_str() != "-" => "plaintext-file",
+                _ => "stdout",
+            },
+        }),
+    )?;
+    // Stream VCF to stdout; buffer it (in zeroized memory) for files and --encrypt-output.
+    let to_stdout = ctx.out.output.as_ref().is_none_or(|p| p.as_os_str() == "-") && !ctx.encrypt_output;
+    let mut buffered = zeroize::Zeroizing::new(Vec::new());
+    let sink: Box<dyn Write + '_> =
+        if to_stdout { Box::new(std::io::stdout().lock()) } else { Box::new(&mut *buffered) };
     let mut w = BufWriter::new(sink);
     let res: std::io::Result<()> = (|| {
         if vcf {
@@ -170,7 +181,8 @@ pub fn run(ctx: &Ctx, a: ExportArgs, vcf: bool) -> Result<()> {
     }
     if vcf {
         w.flush().or_else(|e| if e.kind() == std::io::ErrorKind::BrokenPipe { Ok(()) } else { Err(e) })?;
-        return Ok(());
+        drop(w);
+        return if to_stdout { Ok(()) } else { ctx.write_output(&buffered, true) };
     }
     drop(w);
     let rows = calls.iter().map(|c| genotype_row(&id, c, build, "observed", None)).collect();
@@ -179,5 +191,5 @@ pub fn run(ctx: &Ctx, a: ExportArgs, vcf: bool) -> Result<()> {
         out.format = Format::Tsv;
     }
     let report = Report::new("genotypes", rows).table_columns(GENOTYPE_TABLE_COLUMNS).warnings(warnings).exact();
-    crate::output::emit(&report, &out, ctx.quiet())
+    ctx.emit_with(&report, &out)
 }

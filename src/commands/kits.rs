@@ -11,7 +11,8 @@ use crate::store;
 
 pub fn list(ctx: &Ctx) -> Result<()> {
     let db = ctx.db()?;
-    let rows = store::list(&db)?.iter().map(to_record).collect();
+    let rows: Vec<_> = store::list(&db)?.iter().map(to_record).collect();
+    ctx.audit("kits", serde_json::json!({"rows": rows.len()}))?;
     ctx.emit(&Report::new("kits", rows).table_columns(KIT_COLUMNS))
 }
 
@@ -19,6 +20,7 @@ pub fn rm(ctx: &Ctx, a: RmArgs) -> Result<()> {
     let db = ctx.db()?;
     let kit = store::get(&db, &a.kit)?;
     remove_kit(ctx, &db, &kit)?;
+    ctx.audit("rm", serde_json::json!({"kit": kit.id, "records": kit.records}))?;
     ctx.info(&format!("removed {} '{}'", kit.id, kit.name));
     ctx.emit(&Report::new("kits", vec![to_record(&kit)]).table_columns(KIT_COLUMNS))
 }
@@ -31,6 +33,7 @@ pub fn summary(ctx: &Ctx, a: SummaryArgs) -> Result<()> {
         a.kits.iter().map(|k| store::get(&db, k)).collect::<Result<Vec<_>>>()?
     };
     let mut warnings = Vec::new();
+    ctx.audit("summary", serde_json::json!({"kits": kits.iter().map(|k| k.id.as_str()).collect::<Vec<_>>()}))?;
     let rows = kits
         .into_iter()
         .map(|k| {

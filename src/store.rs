@@ -81,6 +81,10 @@ impl Kit {
     }
 }
 
+/// Every table and its columns, in dump order (the encrypted container stores
+/// a logical dump of these; see `Db::dump`).
+pub const TABLES: &[(&str, &str)] = &[("schema_migrations", "version, name, applied_at"), ("kits", COLS)];
+
 const COLS: &str = "seq, id, name, source_format, assay, build, build_evidence, sample, records, has_rsids, \
                     rsid_records, ref_calls, chip, imported_at, source_path, store_dir, summary_json, warnings_json";
 

@@ -186,7 +186,10 @@ selects `vcf|tsv|json`.
 | `compare A B [--max-discordant N] [--region]` | concordance on overlapping sites, B lifted to A's build |
 | `export KIT --format vcf\|tsv\|json [--region ...]` | |
 | `pipeline plan\|run FASTQ... --out DIR [--reference GRCh38\|FASTA] [--region] [--max-reads] [--threads] [--caller bcftools\|deepvariant] [--aligner minimap2\|bwa-mem2]` | FASTQ -> VCF -> kit; see [docs/pipeline.md](docs/pipeline.md) |
-| `doctor` | external tools (with `brew install` hints), cached chains/reference/dbSNP |
+| `doctor` | external tools (with `brew install` hints), cached chains/reference/dbSNP, encryption status |
+| `db init\|encrypt\|rekey\|unlock\|lock\|status` | encryption at rest (on by default); see [docs/security.md](docs/security.md) |
+| `audit log [--limit N]` | verified, encrypted audit trail of commands touching personal data (counts only, no values) |
+| `decrypt FILE` | read back `--encrypt-output` exports and `pipeline run --seal` outputs |
 | `config show [--effective] \| set \| unset \| path \| keys`, `completions SHELL`, `man [--dir]` | |
 
 ### The rsid coordinate table
@@ -221,11 +224,37 @@ its source; `genome config keys` lists keys and env names.
 | `threads`, `aligner`, `caller`, `container`, `reference` | `GENOME_THREADS`, ... | 4, `minimap2`, `bcftools`, `auto`, `GRCh38` |
 | `reference_grch37`, `reference_grch38` | | optional FASTA (+`.fai`) used to fill reference alleles for `inferred_ref` and array sites |
 | `ucsc_url`, `reference_url`, `offline` | `GENOME_OFFLINE` | UCSC goldenPath, NCBI no-alt set, false |
+| `kek` | `GENOME_KEK` | `auto`: key source for new encrypted databases (`GENOME_KEY`, else OS keyring, else prompt) |
+| `insecure_plaintext` | `GENOME_INSECURE_PLAINTEXT` | false; store data unencrypted (warns every run) |
+
+## Encryption at rest
+
+Everything genome-cli writes under `data_dir` is encrypted by default with
+XChaCha20-Poly1305: the kit database (a sealed container, loaded into an
+in-memory fsqlite database, so no plaintext WAL or journal ever exists), every
+genotype store (chunked AEAD, so lookups stay random-access) and an
+append-only, hash-chained audit log. A random per-database key is wrapped by a
+key from the macOS Keychain / Linux Secret Service, from `GENOME_KEY` (CI), or
+from an Argon2id passphrase prompt. Plaintext only with `--insecure-plaintext`.
+`--output` files with health data print a warning unless `--encrypt-output` is
+used. Threat model, formats, key handling, measured cost and the HIPAA note:
+[docs/security.md](docs/security.md). fsqlite's documented `PRAGMA
+fsqlite.key` does not encrypt in 0.4.9 (tested), which is why genome-cli
+has its own encryption layer.
+
+```sh
+genome db init                        # encrypted (OS keyring, or GENOME_KEY / passphrase)
+genome db encrypt                     # migrate an existing plaintext database in place
+genome db rekey --kek passphrase      # new passphrase from GENOME_NEW_KEY or a prompt
+genome audit log --limit 20
+genome export wgs --format vcf -o wgs.vcf.enc --encrypt-output   # GENOME_EXPORT_KEY or prompt
+```
 
 ## Storage
 
 Kit metadata (one row per kit, including the precomputed summary) is in a
-FrankenSQLite (fsqlite) database, wired exactly like biomarker-cli. The
+FrankenSQLite (fsqlite) database, held in memory and sealed to disk (see
+above). The
 genotype table is **not**. Measured with `examples/fsqlite_bench.rs`
 (`cargo run --release --example fsqlite_bench -- N`; release build, one
 transaction, x86_64, fsqlite 0.4.9), fsqlite inserted 7,392 genotype rows/s
@@ -248,7 +277,8 @@ at import.
 ## Exit codes
 
 0 ok, 1 error, 2 usage, 3 not found, 4 invalid data, 5 database, 6 io,
-7 config, 8 network, 9 external tool. With `--format json` errors are printed
+7 config, 8 network, 9 external tool, 10 crypto (missing or wrong key,
+tampered or corrupt encrypted data). With `--format json` errors are printed
 on stdout as `{"schema":"genome/v1","ok":false,"error":{"code":...,"message":...}}`.
 
 ## Building

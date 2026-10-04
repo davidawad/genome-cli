@@ -32,10 +32,33 @@ pub fn cached_reference_path(cache_dir: &Path) -> PathBuf {
 
 #[derive(Debug, Clone)]
 pub enum Builtin {
-    FetchReference { url: String, gz: PathBuf, dest: PathBuf },
-    Subsample { r1: PathBuf, r2: PathBuf, n: u64, out1: PathBuf, out2: PathBuf },
-    Import { vcf: PathBuf, name: String, marker: PathBuf },
+    FetchReference {
+        url: String,
+        gz: PathBuf,
+        dest: PathBuf,
+    },
+    Subsample {
+        r1: PathBuf,
+        r2: PathBuf,
+        n: u64,
+        out1: PathBuf,
+        out2: PathBuf,
+    },
+    Import {
+        vcf: PathBuf,
+        name: String,
+        marker: PathBuf,
+    },
+    /// `--seal`: encrypt the final VCF with the database key, shred everything else under --out.
+    Seal {
+        out: PathBuf,
+        vcf: PathBuf,
+        sealed: PathBuf,
+    },
 }
+
+/// Label of sealed pipeline outputs (see `crypto::SealedWriter`).
+pub const SEALED_OUTPUT_LABEL: &str = "pipeline-output";
 
 #[derive(Debug, Clone)]
 pub struct Step {
@@ -187,6 +210,7 @@ pub struct Settings {
     pub sample: String,
     pub name: String,
     pub import: bool,
+    pub seal: bool,
 }
 
 /// Build the full step list.
@@ -494,12 +518,56 @@ pub fn plan(st: &Settings, lanes: &[Lane]) -> Vec<Step> {
             inputs: vec![fin.clone()],
             outputs: vec![marker.clone()],
             pipe_next: false,
-            builtin: Some(Builtin::Import { vcf: fin, name: st.name.clone(), marker }),
+            builtin: Some(Builtin::Import { vcf: fin.clone(), name: st.name.clone(), marker }),
+            status: "planned",
+            seconds: None,
+        });
+    }
+    if st.seal {
+        let sealed = PathBuf::from(format!("{}.sealed", s(&fin)));
+        steps.push(Step {
+            step: "seal",
+            tool: "genome".into(),
+            argv: vec!["genome-builtin".into(), "seal".into(), s(&fin), s(&sealed), "--shred-intermediates".into()],
+            inputs: vec![fin.clone()],
+            outputs: vec![sealed.clone()],
+            pipe_next: false,
+            builtin: Some(Builtin::Seal { out: out.clone(), vcf: fin, sealed }),
             status: "planned",
             seconds: None,
         });
     }
     steps
+}
+
+/// Seal the final VCF with the database key and shred every other file under `out`
+/// (reads, BAMs, intermediate VCFs, indexes, logs). Keeps `import.json`.
+fn seal_outputs(ctx: &Ctx, out: &Path, vcf: &Path, sealed: &Path) -> Result<()> {
+    let key = ctx.store_key()?.ok_or_else(|| {
+        AppError::usage("--seal needs an encrypted database (it is not available with --insecure-plaintext)")
+    })?;
+    crate::crypto::seal_file(vcf, sealed, &key, SEALED_OUTPUT_LABEL)?;
+    let mut n = 0;
+    shred_tree(out, &[sealed.to_path_buf(), out.join("import.json")], &mut n)?;
+    ctx.info(&format!("sealed {} ; shredded {n} intermediate files under {}", sealed.display(), out.display()));
+    Ok(())
+}
+
+fn shred_tree(dir: &Path, keep: &[PathBuf], n: &mut usize) -> Result<()> {
+    for e in std::fs::read_dir(dir)? {
+        let p = e?.path();
+        if keep.contains(&p) {
+            continue;
+        }
+        if p.is_dir() {
+            shred_tree(&p, keep, n)?;
+            let _ = std::fs::remove_dir(&p);
+        } else {
+            crate::crypto::shred(&p)?;
+            *n += 1;
+        }
+    }
+    Ok(())
 }
 
 /// Groups of step indices connected by pipes.
@@ -706,6 +774,7 @@ fn settings(ctx: &Ctx, a: &PipelineArgs, lanes: &[Lane]) -> Result<Settings> {
         name: a.name.clone().unwrap_or_else(|| sample.clone()),
         sample,
         import: !a.no_import,
+        seal: a.seal,
     })
 }
 
@@ -787,6 +856,7 @@ pub fn run_cmd(ctx: &Ctx, cmd: PipelineCmd) -> Result<i32> {
                     Ok(())
                 })
             }
+            Some(Builtin::Seal { out, vcf, sealed }) => seal_outputs(ctx, &out, &vcf, &sealed),
             None => run_group(&steps[g.clone()], &logs, g.start),
         };
         let secs = start.elapsed().as_secs_f64();
@@ -855,6 +925,7 @@ mod tests {
             sample: "S".into(),
             name: "S".into(),
             import: true,
+            seal: false,
         };
         let steps = plan(&st, &lanes);
         let kinds: Vec<&str> = steps.iter().map(|s| s.step).collect();

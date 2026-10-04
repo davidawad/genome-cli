@@ -8,6 +8,8 @@
 # from the repo root against the synthetic fixtures in tests/fixtures, in a
 # throwaway data dir. The fixture chain files stand in for the UCSC ones so the
 # session runs offline; SOURCE_DATE_EPOCH pins the JSON `generated_at`.
+# GENOME_KEY is a throwaway passphrase for the (encrypted) sample database;
+# GENOME_INSECURE_FAST_KDF=1 weakens Argon2id for speed and is for tests only.
 # Needs bash and python3.
 set -euo pipefail
 
@@ -38,6 +40,7 @@ genome() {
     env -i PATH="$PATH" HOME="$work" XDG_CONFIG_HOME="$work/config" \
         GENOME_DATA_DIR="$work/data" GENOME_CACHE_DIR="$work/cache" GENOME_OFFLINE=1 \
         GENOME_COLOR=always SOURCE_DATE_EPOCH=1790000000 \
+        GENOME_KEY=readme-sample-key GENOME_INSECURE_FAST_KDF=1 \
         "$GENOME_BIN" "$@" 2>&1
 }
 

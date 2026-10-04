@@ -38,6 +38,9 @@ impl Env {
             .env("GENOME_DATA_DIR", self.path("data"))
             .env("GENOME_CACHE_DIR", self.path("cache"))
             .env("GENOME_OFFLINE", "1")
+            // Encrypted database with a test passphrase (weak KDF: tests only).
+            .env("GENOME_KEY", "cli-test-key")
+            .env("GENOME_INSECURE_FAST_KDF", "1")
             .env("NO_COLOR", "1");
         c
     }

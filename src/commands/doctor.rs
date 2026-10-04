@@ -84,6 +84,9 @@ pub fn run(ctx: &Ctx) -> Result<()> {
             "hint": if has { None } else { Some("genome rsid-table import DBSNP_VCF") },
         })));
     }
+    let (enc_rows, enc_warnings) = crate::commands::db_cmd::status_rows(ctx);
+    rows.extend(enc_rows.iter().map(to_record));
+    warnings.extend(enc_warnings);
     rows.push(to_record(&json!({
         "check": "database", "status": "ok", "detail": ctx.db_path, "purpose": "kit metadata (fsqlite)", "hint": null,
     })));
