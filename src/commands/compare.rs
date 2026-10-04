@@ -16,6 +16,9 @@ use crate::store;
 /// Original position of a call lifted from B's build.
 type Lift = Option<(Build, u32)>;
 
+/// B's called sites keyed by (chrom, pos) in A's build.
+type BSites = HashMap<(String, u32), (Call, Lift)>;
+
 /// Genotype comparable as unordered A/C/G/T alleles (skips indel codes like `DI`).
 fn snv_key(c: &Call) -> Option<Vec<String>> {
     if !c.is_called() || c.genotype.contains('/') || !c.genotype.chars().all(|b| matches!(b, 'A' | 'C' | 'G' | 'T')) {
@@ -51,12 +54,7 @@ fn apply_lift(mut c: Call, chrom: String, pos: u32, reverse: bool) -> Call {
 
 /// B's called sites keyed in A's coordinates (lifted when the builds differ),
 /// plus how many failed to lift.
-fn b_sites_in_a(
-    ctx: &Ctx,
-    vb: &mut KitView,
-    build_a: Build,
-    region: Option<&Region>,
-) -> Result<(HashMap<(String, u32), (Call, Lift)>, u64)> {
+fn b_sites_in_a(ctx: &Ctx, vb: &mut KitView, build_a: Build, region: Option<&Region>) -> Result<(BSites, u64)> {
     let build_b = vb.build();
     let mut lifter = ctx.lifter();
     let mut b_calls = Vec::new();
@@ -164,11 +162,8 @@ impl Tally {
     }
 
     fn record(self, lifted: bool) -> crate::output::Record {
-        let concordance = if self.overlap > 0 {
-            ((self.concordant as f64 / self.overlap as f64) * 1e6).round() / 1e6
-        } else {
-            0.0
-        };
+        let concordance =
+            if self.overlap > 0 { ((self.concordant as f64 / self.overlap as f64) * 1e6).round() / 1e6 } else { 0.0 };
         to_record(&json!({
             "a": self.id_a,
             "b": self.id_b,
@@ -189,7 +184,7 @@ impl Tally {
 fn judge_a_sites(
     va: &mut KitView,
     b_absent_means_ref: bool,
-    b_sites: &mut HashMap<(String, u32), (Call, Lift)>,
+    b_sites: &mut BSites,
     region: Option<&Region>,
     t: &mut Tally,
 ) -> Result<()> {
@@ -214,7 +209,7 @@ fn judge_a_sites(
 }
 
 /// When A is variant-only, B sites A never listed are A hom-ref.
-fn judge_b_only_sites(va: &mut KitView, b_sites: HashMap<(String, u32), (Call, Lift)>, t: &mut Tally) -> Result<()> {
+fn judge_b_only_sites(va: &mut KitView, b_sites: BSites, t: &mut Tally) -> Result<()> {
     for (cb, from) in b_sites.into_values().filter(|(c, _)| is_primary(&c.chrom)) {
         let reference = reference_for(va, &cb)?;
         t.inferred += 1;

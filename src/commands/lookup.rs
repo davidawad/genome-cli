@@ -214,7 +214,8 @@ fn lookup_rsid(v: &mut KitView, lifter: &mut crate::liftover::Lifter, rsid: &str
 fn lookup_pos(v: &mut KitView, lifter: &mut crate::liftover::Lifter, p: &str, qbuild: Build) -> Result<Vec<Record>> {
     let kb = v.build();
     let kit_id = v.kit.id.clone();
-    let (chrom, pos) = parse_locus(p).ok_or_else(|| AppError::usage(format!("bad position '{p}' (expected CHR:POS)")))?;
+    let (chrom, pos) =
+        parse_locus(p).ok_or_else(|| AppError::usage(format!("bad position '{p}' (expected CHR:POS)")))?;
     let mut lifted_from = None;
     let (chrom, pos) = if qbuild != kb && qbuild != Build::Unknown && kb != Build::Unknown {
         let Some(l) = lifter.lift(qbuild, kb, &chrom, pos)? else {

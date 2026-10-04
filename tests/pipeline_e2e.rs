@@ -6,7 +6,7 @@
 //! minimap2, samtools or bcftools are not on PATH.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use serde_json::Value;
