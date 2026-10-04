@@ -138,7 +138,10 @@ fn genome(d: &Path) -> Command {
         .env("HOME", d)
         .env("XDG_CONFIG_HOME", d.join("config"))
         .env("GENOME_DATA_DIR", d.join("data"))
-        .env("GENOME_CACHE_DIR", d.join("cache"));
+        .env("GENOME_CACHE_DIR", d.join("cache"))
+        // Encrypted database with a test passphrase (weak KDF: tests only).
+        .env("GENOME_KEY", "pipeline-e2e-test-key")
+        .env("GENOME_INSECURE_FAST_KDF", "1");
     c
 }
 

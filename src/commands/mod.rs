@@ -2,6 +2,7 @@
 
 pub mod compare;
 pub mod config_cmd;
+pub mod db_cmd;
 pub mod doctor;
 pub mod export;
 pub mod import;
@@ -35,6 +36,9 @@ pub fn dispatch(ctx: &Ctx, cmd: Command, export_vcf: bool) -> Result<Status> {
         Command::Export(a) => export::run(ctx, a, export_vcf).map(|()| 0),
         Command::Pipeline(c) => crate::pipeline::run_cmd(ctx, c),
         Command::Doctor => doctor::run(ctx).map(|()| 0),
+        Command::Db(c) => db_cmd::run(ctx, c).map(|()| 0),
+        Command::Audit(c) => db_cmd::audit(ctx, c).map(|()| 0),
+        Command::Decrypt(a) => db_cmd::decrypt(ctx, a).map(|()| 0),
         Command::Config(c) => config_cmd::run(ctx, c).map(|()| 0),
         Command::Completions(a) => misc::completions(a).map(|()| 0),
         Command::Man(a) => misc::man(a).map(|()| 0),

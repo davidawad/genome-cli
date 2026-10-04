@@ -261,6 +261,7 @@ pub fn run(ctx: &Ctx, a: CompareArgs) -> Result<()> {
     warnings.extend(t.warnings());
     warnings.extend(va.warnings.drain(..).chain(vb.warnings.drain(..)));
     let row = t.record(lifted);
+    ctx.audit("compare", serde_json::json!({"kits": [va.kit.id, vb.kit.id], "overlap": row.get("overlap")}))?;
     ctx.emit(
         &Report::new("compare", vec![row])
             .table_columns(&[

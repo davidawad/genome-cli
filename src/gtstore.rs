@@ -12,11 +12,15 @@
 //! - `heap.bin`: per record `len u32` + `rsid\tref\talt\tgenotype\tfilter\tgt` (UTF-8)
 //! - `rsid.idx`: magic `GNMRSID1`, sorted `rs u32 | record u32` pairs
 //! - `contigs.json`: contig names indexed by the `contig` field
+//!
+//! In an encrypted database every file is a chunked AEAD sealed file
+//! (`crypto::SealedWriter`, label = file name) over exactly these bytes, so
+//! positioned reads decrypt only the 64 KiB chunks they touch.
 
-use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use crate::crypto::{Key, Sink, Source};
 use crate::error::{AppError, Result};
 use crate::model::{primary_index, rs_number, Call, Zygosity};
 
@@ -84,7 +88,8 @@ fn store_err(p: &Path, e: impl std::fmt::Display) -> AppError {
 /// Accumulates calls during import, then sorts and writes the kit files.
 pub struct Writer {
     dir: PathBuf,
-    heap: BufWriter<File>,
+    key: Option<Key>,
+    heap: Sink,
     heap_len: u64,
     pub sites: Vec<Site>,
     pub contigs: Vec<String>,
@@ -92,10 +97,10 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub fn create(dir: &Path) -> Result<Self> {
+    /// Create a store in `dir`, sealed with `key` (plaintext without one).
+    pub fn create(dir: &Path, key: Option<&Key>) -> Result<Self> {
         std::fs::create_dir_all(dir).map_err(|e| store_err(dir, e))?;
-        let hp = dir.join("heap.bin");
-        let heap = BufWriter::with_capacity(1 << 20, File::create(&hp).map_err(|e| store_err(&hp, e))?);
+        let heap = Sink::create(&dir.join("heap.bin"), key, "heap.bin")?;
         // Contig ids 0..=25 are reserved for the primary chromosomes so the sort
         // order is 1..22, X, Y, MT, then other contigs in first-seen order.
         let mut contigs: Vec<String> = vec![String::new(); 26];
@@ -104,7 +109,15 @@ impl Writer {
         contigs[24] = "Y".into();
         contigs[25] = "MT".into();
         let contig_ids = contigs.iter().enumerate().skip(1).map(|(i, c)| (c.clone(), i as u16)).collect();
-        Ok(Self { dir: dir.to_path_buf(), heap, heap_len: 0, sites: Vec::new(), contigs, contig_ids })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            key: key.cloned(),
+            heap,
+            heap_len: 0,
+            sites: Vec::new(),
+            contigs,
+            contig_ids,
+        })
     }
 
     fn contig_id(&mut self, chrom: &str) -> Result<u16> {
@@ -154,66 +167,66 @@ impl Writer {
 
     /// Sort, write `sites.bin`, `rsid.idx`, `contigs.json`. Returns the sorted sites.
     pub fn finish(mut self) -> Result<(Vec<Site>, Vec<String>)> {
-        self.heap.flush()?;
+        self.heap.finish()?;
+        let key = self.key.as_ref();
         self.sites.sort_by_key(|s| (s.contig, s.pos, s.end));
-        let sp = self.dir.join("sites.bin");
-        let mut w = BufWriter::with_capacity(1 << 20, File::create(&sp).map_err(|e| store_err(&sp, e))?);
+        let mut w = Sink::create(&self.dir.join("sites.bin"), key, "sites.bin")?;
         w.write_all(SITE_MAGIC)?;
         for s in &self.sites {
             w.write_all(&s.encode())?;
         }
-        w.flush()?;
+        w.finish()?;
         let mut idx: Vec<(u32, u32)> =
             self.sites.iter().enumerate().filter(|(_, s)| s.rs != 0).map(|(i, s)| (s.rs, i as u32)).collect();
         idx.sort_unstable();
-        let ip = self.dir.join("rsid.idx");
-        let mut w = BufWriter::new(File::create(&ip).map_err(|e| store_err(&ip, e))?);
+        let mut w = Sink::create(&self.dir.join("rsid.idx"), key, "rsid.idx")?;
         w.write_all(RSID_MAGIC)?;
         for (rs, i) in idx {
             w.write_all(&rs.to_le_bytes())?;
             w.write_all(&i.to_le_bytes())?;
         }
-        w.flush()?;
-        let cp = self.dir.join("contigs.json");
-        std::fs::write(&cp, serde_json::to_string(&self.contigs)?).map_err(|e| store_err(&cp, e))?;
+        w.finish()?;
+        let mut w = Sink::create(&self.dir.join("contigs.json"), key, "contigs.json")?;
+        w.write_all(serde_json::to_string(&self.contigs)?.as_bytes())?;
+        w.finish()?;
         Ok((self.sites, self.contigs))
     }
 }
 
+/// The files of a kit store (all sealed in an encrypted database).
+pub const FILES: &[&str] = &["sites.bin", "heap.bin", "rsid.idx", "contigs.json"];
+
 /// Read access to a kit's genotype store.
 pub struct Reader {
     dir: PathBuf,
-    sites: File,
-    heap: File,
+    key: Option<Key>,
+    sites: Source,
+    heap: Source,
+    rsid: Option<Source>,
     pub n: u64,
     pub contigs: Vec<String>,
 }
 
-fn read_exact_at(f: &mut File, off: u64, buf: &mut [u8]) -> std::io::Result<()> {
-    f.seek(SeekFrom::Start(off))?;
-    f.read_exact(buf)
-}
-
 impl Reader {
-    pub fn open(dir: &Path) -> Result<Self> {
+    /// Open a store; sealed stores need `key`, and with a key plaintext files are refused.
+    pub fn open(dir: &Path, key: Option<&Key>) -> Result<Self> {
         let sp = dir.join("sites.bin");
-        let mut sites = File::open(&sp).map_err(|e| store_err(&sp, e))?;
+        let mut sites = Source::open(&sp, key, "sites.bin")?;
         let mut magic = [0u8; 8];
-        sites.read_exact(&mut magic).map_err(|e| store_err(&sp, e))?;
-        if &magic != SITE_MAGIC {
+        if sites.len() < 8 || sites.read_at(0, &mut magic).is_err() || &magic != SITE_MAGIC {
             return Err(AppError::invalid(format!("{} is not a genome-cli site store", sp.display())));
         }
-        let n = (sites.metadata()?.len() - 8) / REC as u64;
-        let hp = dir.join("heap.bin");
-        let heap = File::open(&hp).map_err(|e| store_err(&hp, e))?;
+        let n = (sites.len() - 8) / REC as u64;
+        let heap = Source::open(&dir.join("heap.bin"), key, "heap.bin")?;
         let cp = dir.join("contigs.json");
-        let contigs: Vec<String> = serde_json::from_str(&std::fs::read_to_string(&cp).map_err(|e| store_err(&cp, e))?)?;
-        Ok(Self { dir: dir.to_path_buf(), sites, heap, n, contigs })
+        let contigs: Vec<String> = serde_json::from_slice(&Source::open(&cp, key, "contigs.json")?.read_all()?)
+            .map_err(|e| store_err(&cp, e))?;
+        Ok(Self { dir: dir.to_path_buf(), key: key.cloned(), sites, heap, rsid: None, n, contigs })
     }
 
     pub fn site(&mut self, i: u64) -> Result<Site> {
         let mut b = [0u8; REC];
-        read_exact_at(&mut self.sites, 8 + i * REC as u64, &mut b)?;
+        self.sites.read_at(8 + i * REC as u64, &mut b)?;
         Ok(Site::decode(&b))
     }
 
@@ -224,9 +237,9 @@ impl Reader {
     /// Expand a site into a full call.
     pub fn call(&mut self, s: &Site) -> Result<Call> {
         let mut len = [0u8; 4];
-        read_exact_at(&mut self.heap, s.heap, &mut len)?;
+        self.heap.read_at(s.heap, &mut len)?;
         let mut buf = vec![0u8; u32::from_le_bytes(len) as usize];
-        self.heap.read_exact(&mut buf)?;
+        self.heap.read_at(s.heap + 4, &mut buf)?;
         Ok(call_from(s, &self.contigs, &buf))
     }
 
@@ -282,18 +295,26 @@ impl Reader {
     /// Calls for an rsid (via `rsid.idx`).
     pub fn by_rsid(&mut self, rsid: &str) -> Result<Vec<Call>> {
         let Some(rs) = rs_number(rsid) else { return self.scan_rsid(rsid) };
-        let ip = self.dir.join("rsid.idx");
-        let mut f = File::open(&ip).map_err(|e| store_err(&ip, e))?;
-        let n = (f.metadata()?.len().saturating_sub(8)) / 8;
-        let entry = |f: &mut File, i: u64| -> Result<(u32, u32)> {
+        if self.rsid.is_none() {
+            self.rsid = Some(Source::open(&self.dir.join("rsid.idx"), self.key.as_ref(), "rsid.idx")?);
+        }
+        let mut f = self.rsid.take().expect("opened");
+        let res = self.by_rs(&mut f, rs);
+        self.rsid = Some(f);
+        res
+    }
+
+    fn by_rs(&mut self, f: &mut Source, rs: u32) -> Result<Vec<Call>> {
+        let n = f.len().saturating_sub(8) / 8;
+        let entry = |f: &mut Source, i: u64| -> Result<(u32, u32)> {
             let mut b = [0u8; 8];
-            read_exact_at(f, 8 + i * 8, &mut b)?;
+            f.read_at(8 + i * 8, &mut b)?;
             Ok((u32::from_le_bytes(b[0..4].try_into().expect("4")), u32::from_le_bytes(b[4..8].try_into().expect("4"))))
         };
         let (mut lo, mut hi) = (0u64, n);
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            if entry(&mut f, mid)?.0 < rs {
+            if entry(f, mid)?.0 < rs {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -301,7 +322,7 @@ impl Reader {
         }
         let mut out = Vec::new();
         while lo < n {
-            let (r, i) = entry(&mut f, lo)?;
+            let (r, i) = entry(f, lo)?;
             if r != rs {
                 break;
             }
@@ -326,26 +347,9 @@ impl Reader {
 
     /// Stream all calls in sorted order. The callback returns false to stop.
     pub fn for_each(&mut self, f: &mut dyn FnMut(Call) -> Result<bool>) -> Result<()> {
-        let sp = self.dir.join("sites.bin");
-        let hp = self.dir.join("heap.bin");
-        let mut sr = BufReader::with_capacity(1 << 20, File::open(&sp)?);
-        sr.seek(SeekFrom::Start(8))?;
-        let mut hr = BufReader::with_capacity(1 << 20, File::open(&hp)?);
-        let mut heap_pos: u64 = 0;
-        let mut b = [0u8; REC];
-        for _ in 0..self.n {
-            sr.read_exact(&mut b)?;
-            let s = Site::decode(&b);
-            if s.heap != heap_pos {
-                hr.seek(SeekFrom::Start(s.heap))?;
-            }
-            let mut len = [0u8; 4];
-            hr.read_exact(&mut len)?;
-            let l = u32::from_le_bytes(len) as usize;
-            let mut buf = vec![0u8; l];
-            hr.read_exact(&mut buf)?;
-            heap_pos = s.heap + 4 + l as u64;
-            if !f(call_from(&s, &self.contigs, &buf))? {
+        for i in 0..self.n {
+            let s = self.site(i)?;
+            if !f(self.call(&s)?)? {
                 break;
             }
         }
@@ -419,8 +423,13 @@ mod tests {
 
     #[test]
     fn roundtrip_sorted_lookup() {
+        roundtrip(None);
+        roundtrip(Some(Key::random().unwrap()));
+    }
+
+    fn roundtrip(key: Option<Key>) {
         let dir = tempfile::tempdir().unwrap();
-        let mut w = Writer::create(dir.path()).unwrap();
+        let mut w = Writer::create(dir.path(), key.as_ref()).unwrap();
         for c in [
             call("X", 50, Some("rs9"), "AG"),
             call("2", 10, Some("rs7"), "AG"),
@@ -435,7 +444,7 @@ mod tests {
         block.ref_block = true;
         w.push(&block).unwrap();
         w.finish().unwrap();
-        let mut r = Reader::open(dir.path()).unwrap();
+        let mut r = Reader::open(dir.path(), key.as_ref()).unwrap();
         assert_eq!(r.n, 6);
         let mut order = Vec::new();
         r.for_each(&mut |c| {

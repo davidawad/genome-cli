@@ -45,7 +45,7 @@ pub fn run(ctx: &Ctx, a: ImportArgs) -> Result<Kit> {
     }
     ctx.info(&format!("importing {} as {} ({})", a.file.display(), id, format.as_str()));
     let result = (|| {
-        let mut w = Writer::create(&dir)?;
+        let mut w = Writer::create(&dir, ctx.store_key()?.as_ref())?;
         let mut rsid_records = 0i64;
         let mut n = 0u64;
         let info = parse::parse(&a.file, format, a.sample.as_deref(), &mut |c| {
@@ -127,6 +127,7 @@ pub fn run(ctx: &Ctx, a: ImportArgs) -> Result<Kit> {
             return Err(e);
         }
     };
+    ctx.audit("import", serde_json::json!({"kit": kit.id, "records": kit.records, "replace": a.replace}))?;
     ctx.info(&format!(
         "imported {} '{}': {} records, {} {} ({}), ref_calls {}",
         kit.id, kit.name, kit.records, kit.source_format, kit.build, kit.build_evidence, kit.ref_calls

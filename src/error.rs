@@ -23,6 +23,8 @@ pub enum ErrorKind {
     Network,
     /// An external tool (minimap2, samtools, bcftools, ...) is missing or failed.
     Tool,
+    /// Missing or wrong key, or encrypted data failed authentication (tampered/corrupt).
+    Crypto,
 }
 
 impl ErrorKind {
@@ -37,6 +39,7 @@ impl ErrorKind {
             Self::Config => 7,
             Self::Network => 8,
             Self::Tool => 9,
+            Self::Crypto => 10,
         }
     }
 
@@ -51,6 +54,7 @@ impl ErrorKind {
             Self::Config => "config",
             Self::Network => "network",
             Self::Tool => "tool",
+            Self::Crypto => "crypto",
         }
     }
 }

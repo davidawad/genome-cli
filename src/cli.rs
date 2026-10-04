@@ -15,7 +15,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
         index files. Every command can emit table, json, jsonl, csv or tsv output; JSON uses the versioned \
         `genome/v1` envelope documented in docs/json-schema.md.",
     after_help = "Exit codes: 0 ok, 1 error, 2 usage, 3 not found, 4 invalid data, 5 database, 6 io, 7 config, \
-        8 network, 9 external tool."
+        8 network, 9 external tool, 10 crypto (missing/wrong key, tampered data)."
 )]
 pub struct Cli {
     #[command(flatten)]
@@ -65,6 +65,12 @@ pub struct GlobalOpts {
     /// Never download (chain files, reference); fail if not cached
     #[arg(long, global = true)]
     pub offline: bool,
+    /// Store personal data UNENCRYPTED (new database) or open an unencrypted one; prints a warning
+    #[arg(long, global = true)]
+    pub insecure_plaintext: bool,
+    /// Encrypt --output files with a passphrase (GENOME_EXPORT_KEY or prompt); read with `genome decrypt`
+    #[arg(long, global = true)]
+    pub encrypt_output: bool,
     /// Suppress informational messages
     #[arg(short, long, global = true)]
     pub quiet: bool,
@@ -100,6 +106,14 @@ pub enum Command {
     Pipeline(PipelineCmd),
     /// Report external tools, cache and data locations
     Doctor,
+    /// Encryption at rest: init, encrypt (migrate), rekey, unlock, lock, status
+    #[command(subcommand)]
+    Db(DbCmd),
+    /// Audit trail of commands that read or modify personal data
+    #[command(subcommand)]
+    Audit(AuditCmd),
+    /// Decrypt a file written with --encrypt-output or `pipeline run --seal`
+    Decrypt(DecryptArgs),
     /// Configuration
     #[command(subcommand)]
     Config(ConfigCmd),
@@ -287,6 +301,57 @@ pub struct PipelineArgs {
     /// Re-run every step even if outputs are up to date
     #[arg(long)]
     pub force: bool,
+    /// After a successful run, encrypt the final VCF with the database key (`<sample>.vcf.gz.sealed`)
+    /// and shred every intermediate under --out (reads, BAMs, VCFs, logs)
+    #[arg(long)]
+    pub seal: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DbCmd {
+    /// Create a new database: encrypted by default (plaintext only with --insecure-plaintext)
+    Init {
+        /// Encrypt the new database (the default; accepted for explicitness)
+        #[arg(long)]
+        encrypt: bool,
+        /// Key source: auto (GENOME_KEY if set, else OS keyring, else prompt), keyring, passphrase
+        #[arg(long, value_parser = ["auto", "keyring", "passphrase"])]
+        kek: Option<String>,
+    },
+    /// Encrypt an existing plaintext database and its genotype stores in place
+    Encrypt {
+        /// Key source for the new key (see `db init`)
+        #[arg(long, value_parser = ["auto", "keyring", "passphrase"])]
+        kek: Option<String>,
+    },
+    /// Re-wrap the database key under a new key (new passphrase from GENOME_NEW_KEY or a prompt)
+    Rekey {
+        /// Key source for the new key
+        #[arg(long, value_parser = ["auto", "keyring", "passphrase"])]
+        kek: Option<String>,
+    },
+    /// Cache the passphrase-derived key in the OS keyring until `db lock`
+    Unlock,
+    /// Forget a cached key (`db unlock`) and remove stale temporary files
+    Lock,
+    /// Encryption status: cipher, key source, sealed stores, audit log
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AuditCmd {
+    /// Show (and verify) the audit log
+    Log {
+        /// Only the last N entries
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct DecryptArgs {
+    /// File written by --encrypt-output (passphrase: GENOME_EXPORT_KEY or prompt) or `pipeline run --seal`
+    pub file: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]

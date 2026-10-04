@@ -181,6 +181,20 @@ pub const SETTINGS: &[Setting] = &[
         kind: Kind::Str,
     },
     Setting {
+        key: "kek",
+        env: &["GENOME_KEK"],
+        help: "key source for new encrypted databases (auto: GENOME_KEY if set, else OS keyring, else a prompt)",
+        choices: &["auto", "keyring", "passphrase"],
+        kind: Kind::Str,
+    },
+    Setting {
+        key: "insecure_plaintext",
+        env: &["GENOME_INSECURE_PLAINTEXT"],
+        help: "store personal data unencrypted (NOT recommended; prints a warning on every use)",
+        choices: &[],
+        kind: Kind::Bool,
+    },
+    Setting {
         key: "offline",
         env: &["GENOME_OFFLINE"],
         help: "never download; fail if a cached file is missing",
@@ -245,7 +259,8 @@ fn default_value(key: &str) -> String {
         "reference" => "GRCh38".into(),
         "ucsc_url" => "https://hgdownload.soe.ucsc.edu/goldenPath".into(),
         "reference_url" => crate::pipeline::GRCH38_NO_ALT_URL.into(),
-        "offline" | "quiet" | "verbose" => "false".into(),
+        "kek" => "auto".into(),
+        "offline" | "quiet" | "verbose" | "insecure_plaintext" => "false".into(),
         _ => String::new(),
     }
 }

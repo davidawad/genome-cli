@@ -23,6 +23,15 @@ impl Format {
         <Self as clap::ValueEnum>::from_str(s, true)
             .map_err(|_| AppError::usage(format!("unknown output format '{s}' (table, json, jsonl, csv, tsv)")))
     }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Table => "table",
+            Self::Json => "json",
+            Self::Jsonl => "jsonl",
+            Self::Csv => "csv",
+            Self::Tsv => "tsv",
+        }
+    }
     pub fn is_json(self) -> bool {
         matches!(self, Self::Json | Self::Jsonl)
     }

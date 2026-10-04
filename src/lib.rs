@@ -3,15 +3,18 @@
 
 #![recursion_limit = "512"]
 
+pub mod audit;
 pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod context;
+pub mod crypto;
 pub mod db;
 pub mod error;
 pub mod fasta;
 pub mod fetch;
 pub mod gtstore;
+pub mod keys;
 pub mod liftover;
 pub mod model;
 pub mod output;

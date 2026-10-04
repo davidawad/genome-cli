@@ -36,6 +36,7 @@ stderr), with a nonzero exit status:
 | 7 | `config` | config file/value problem |
 | 8 | `network` | download or checksum failure |
 | 9 | `tool` | external tool missing or failed (pipeline) |
+| 10 | `crypto` | missing or wrong key, or encrypted data failed authentication (tampered, truncated, corrupt); see [security.md](security.md) |
 
 ## kind `kits` (`genome kits`, `genome import`, `genome rm`)
 
@@ -131,5 +132,6 @@ stderr), with a nonzero exit status:
 ## Other kinds
 
 `liftover`, `liftover-chains`, `rsid-table`, `rsid-table-import`, `doctor`,
-`config`, `config_keys`, `config_path` use the same envelope; their record
-fields are self-describing.
+`db-status`, `audit` (`seq`, `ts`, `command`, `user`, `details`: kit ids and
+counts, never genotype values), `config`, `config_keys`, `config_path` use the
+same envelope; their record fields are self-describing.

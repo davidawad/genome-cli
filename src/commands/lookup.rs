@@ -25,7 +25,7 @@ pub const INFERRED_REF_WARNING: &str = "call_source inferred_ref: site absent fr
 
 impl<'a> KitView<'a> {
     pub fn open(ctx: &Ctx, kit: Kit, resolver: &'a mut Resolver) -> Result<Self> {
-        let reader = Reader::open(std::path::Path::new(&kit.store_dir))?;
+        let reader = Reader::open(std::path::Path::new(&kit.store_dir), ctx.store_key()?.as_ref())?;
         let fasta = ctx.reference_fasta(kit.build()).and_then(|p| Fasta::open(&p).ok());
         Ok(Self { kit, reader, fasta, resolver, warnings: Vec::new() })
     }
@@ -259,6 +259,10 @@ pub fn run(ctx: &Ctx, a: LookupArgs) -> Result<()> {
         rows.extend(lookup_pos(&mut v, &mut lifter, p, qbuild)?);
     }
     let warnings = std::mem::take(&mut v.warnings);
+    ctx.audit(
+        "lookup",
+        serde_json::json!({"kit": v.kit.id, "queries": a.rsid.len() + a.pos.len(), "rows": rows.len()}),
+    )?;
     ctx.emit(&Report::new("genotypes", rows).table_columns(GENOTYPE_TABLE_COLUMNS).warnings(dedup(warnings)))
 }
 
