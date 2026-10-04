@@ -4,6 +4,10 @@ test-gate:
     cargo clippy --all-targets -- -D warnings
     cargo test
 
+# Regenerate README sample sessions (docs/samples) and the hero screenshot (docs/screenshots).
+readme:
+    scripts/readme-samples.sh
+
 # Release build of the `genome` binary.
 build:
     cargo build --release

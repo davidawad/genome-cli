@@ -1,0 +1,17 @@
+$ genome pipeline plan SYN_S1_L001_R1_001.fastq.gz SYN_S1_L001_R2_001.fastq.gz --out run1 --region chr19:44.9M-45.0M --quiet --columns step,tool,status
+STEP             TOOL      STATUS
+───────────────  ────────  ───────
+fetch-reference  genome    planned
+index            samtools  planned
+index            minimap2  planned
+align            minimap2  planned
+markdup          samtools  planned
+sort             samtools  planned
+markdup          samtools  planned
+index            samtools  planned
+call             bcftools  planned
+call             bcftools  planned
+filter           bcftools  planned
+normalize        bcftools  planned
+normalize        bcftools  planned
+import           genome    planned

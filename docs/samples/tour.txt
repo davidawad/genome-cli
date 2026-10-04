@@ -1,0 +1,32 @@
+$ genome import tests/fixtures/23andme_male.txt --name jane
+importing tests/fixtures/23andme_male.txt as k1 (23andme)
+imported k1 'jane': 113 records, 23andme GRCh37 (header), ref_calls explicit
+ID  NAME  SOURCE_FORMAT  ASSAY  BUILD   RECORDS  HAS_RSIDS  REF_CALLS  SAMPLE
+──  ────  ─────────────  ─────  ──────  ───────  ─────────  ─────────  ──────
+k1  jane  23andme        array  GRCh37      113  true       explicit   jane
+$ genome import tests/fixtures/wgs_grch38.vcf.gz --name wgs
+importing tests/fixtures/wgs_grch38.vcf.gz as k2 (vcf)
+imported k2 'wgs': 70 records, vcf GRCh38 (contig-lengths), ref_calls absent-means-ref
+ID  NAME  SOURCE_FORMAT  ASSAY  BUILD   RECORDS  HAS_RSIDS  REF_CALLS         SAMPLE
+──  ────  ─────────────  ─────  ──────  ───────  ─────────  ────────────────  ───────
+k2  wgs   vcf            wgs    GRCh38       70  false      absent-means-ref  SYNTH38
+$ genome summary
+KIT  RECORDS  NO_CALLS  HET  HOM_ALT  HOM_REF  HOM_UNKNOWN_REF  HEMIZYGOUS  SEX
+───  ───────  ────────  ───  ───────  ───────  ───────────────  ──────────  ────
+k1       113         5   16        0        0               46          46  male
+k2        70         1   21       42        0                0           6  male
+$ genome lookup wgs --rsid rs429358,rs7412
+genome: warning: rs429358: kit has no rsids; resolved via curated table to 19:44908684 (GRCh38)
+genome: warning: rs7412: kit has no rsids; resolved via curated table to 19:44908822 (GRCh38)
+genome: warning: call_source inferred_ref: site absent from a variant-only WGS VCF (ref_calls = absent-means-ref) and reported as homozygous reference because the assay covers the genome
+KIT  RSID      CHROM  POS       BUILD   REF  ALT  GENOTYPE  ZYGOSITY  CALL_SOURCE   FILTER  QUALITY  DEPTH
+───  ────────  ─────  ────────  ──────  ───  ───  ────────  ────────  ────────────  ──────  ───────  ─────
+k2   rs429358     19  44908684  GRCh38  T    C    TC        het       observed      PASS     50.000     30
+k2   rs7412       19  44908822  GRCh38  C    T    CC        hom_ref   inferred_ref
+$ genome compare wgs jane
+genome: warning: k1 lifted from GRCh37 to GRCh38 for comparison
+genome: warning: 103 sites of k1 did not lift over
+genome: warning: call_source inferred_ref: site absent from a variant-only WGS VCF (ref_calls = absent-means-ref) and reported as homozygous reference because the assay covers the genome
+A   B   BUILD   OVERLAP  CONCORDANT  DISCORDANT  CONCORDANCE  INFERRED_REF_SITES
+──  ──  ──────  ───────  ──────────  ──────────  ───────────  ──────────────────
+k2  k1  GRCh38        5           3           2        0.600                   2
