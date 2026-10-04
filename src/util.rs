@@ -13,6 +13,10 @@ fn format_iso(t: DateTime<Utc>) -> String {
     t.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+/// Owner-only directory creation now lives in [`crate::platform::perms`]
+/// (POSIX modes on Unix, a DACL on Windows); kept here for existing callers.
+pub use crate::platform::perms::private_dir;
+
 #[cfg(test)]
 mod tests {
     use super::*;
