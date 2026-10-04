@@ -59,3 +59,7 @@ opt-level = 1
 
 [profile.release]
 strip = "symbols"
+
+[package.metadata.cargo-machete]
+# md-5 is imported under its lib name `md5` (src/fetch.rs).
+ignored = ["md-5"]
