@@ -91,79 +91,14 @@ pub fn summarize(
     source_format: &str,
 ) -> Map<String, Value> {
     let mut c = Counts::default();
-    let mut by_chrom: Map<String, Value> = by_chrom_keys().into_iter().map(|k| (k, Value::from(0u64))).collect();
     let mut chrom_counts = vec![0u64; contigs.len().max(26)];
     for s in sites {
         chrom_counts[s.contig as usize] += 1;
-        let z = s.zygosity();
-        match z {
-            Zygosity::NoCall => c.no_calls += 1,
-            Zygosity::Het => c.het += 1,
-            Zygosity::HomRef => c.hom_ref += 1,
-            Zygosity::HomAlt => c.hom_alt += 1,
-            Zygosity::Hom => c.hom += 1,
-            Zygosity::Hemi => c.hemi += 1,
-        }
-        c.ref_blocks += u64::from(s.is_ref_block());
-        match s.contig {
-            23 if !build.in_par("X", s.pos) && !s.is_ref_block() => {
-                if z != Zygosity::NoCall {
-                    c.x_called += 1;
-                }
-                c.x_het += u64::from(z == Zygosity::Het);
-            }
-            24 if !s.is_ref_block() => {
-                c.y_total += 1;
-                c.y_called += u64::from(z != Zygosity::NoCall);
-            }
-            _ => {}
-        }
+        c.add(s, build);
     }
-    let mut other = 0;
-    for (i, n) in chrom_counts.iter().enumerate() {
-        let name = contigs.get(i).map(String::as_str).unwrap_or("");
-        if *n == 0 {
-            continue;
-        }
-        if is_primary(name) {
-            by_chrom.insert(name.to_string(), Value::from(*n));
-        } else {
-            other += n;
-        }
-    }
-    by_chrom.insert("other_contigs".into(), Value::from(other));
+    let by_chrom = fold_chroms(&chrom_counts, contigs);
     let sex = infer_sex(assay, c.x_called, c.x_het, c.y_total, c.y_called);
-    let mut caveats: Vec<String> = Vec::new();
-    match ref_calls {
-        "absent-means-ref" => caveats.push(
-            "variant-only VCF: hom_ref counts explicit records only; sites absent from the file are implied homozygous reference"
-                .into(),
-        ),
-        "explicit" if source_format == "gvcf" => {
-            caveats.push("gVCF: hom_ref includes reference blocks (counted per record, not per base)".into())
-        }
-        _ => {}
-    }
-    if assay == "array" {
-        caveats.push(
-            "array export: only pre-selected SNPs were genotyped; sites not listed are unknown, not reference".into(),
-        );
-        if c.hom > 0 {
-            caveats.push(format!(
-                "array exports carry no reference allele: {} homozygous calls without a coordinate-table entry are counted as hom_unknown_ref",
-                c.hom
-            ));
-        }
-    }
-    if build == Build::Unknown {
-        caveats.push("genome build unknown: PAR exclusion and liftover are disabled".into());
-    }
-    if sex.call == "uncertain" {
-        caveats.push(format!(
-            "sex inference uncertain (x_het_rate {}, y_call_rate {}, {} non-PAR X sites)",
-            sex.x_het_rate, sex.y_call_rate, sex.x_sites
-        ));
-    }
+    let caveats = caveats(&c, &sex, build, assay, ref_calls, source_format);
     let mut m = Map::new();
     m.insert("kit".into(), kit.into());
     m.insert("records".into(), (sites.len() as u64).into());

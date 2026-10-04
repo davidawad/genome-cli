@@ -8,7 +8,7 @@ use crate::fasta::Fasta;
 use crate::gtstore::Reader;
 use crate::model::{array_zygosity, is_primary, parse_locus, Build, Call, Zygosity};
 use crate::output::{Record, Report};
-use crate::rsids::Resolver;
+use crate::rsids::{Coord, Resolver};
 use crate::store::{self, Kit};
 
 /// Everything needed to answer genotype questions about one kit.
@@ -144,6 +144,100 @@ impl<'a> KitView<'a> {
     }
 }
 
+type Lifted = Option<(Build, u32)>;
+
+/// Coordinates of RSID in the kit's build: from the table directly, or from the
+/// other build's entry lifted over (with the original position).
+fn rsid_coord(v: &mut KitView, lifter: &mut crate::liftover::Lifter, rsid: &str) -> Result<(Option<Coord>, Lifted)> {
+    let kb = v.build();
+    if kb == Build::Unknown {
+        return Ok((None, None));
+    }
+    if let Some(k) = v.resolver.resolve(rsid, kb)? {
+        return Ok((Some(k), None));
+    }
+    let Some(o) = v.resolver.resolve(rsid, kb.other())? else {
+        return Ok((None, None));
+    };
+    match lifter.lift(kb.other(), kb, &o.chrom, o.pos) {
+        Ok(Some(l)) => {
+            let from = Some((kb.other(), o.pos));
+            Ok((Some(Coord { chrom: l.chrom, pos: l.pos, reference: None, ..o }), from))
+        }
+        Ok(None) => {
+            v.warnings.push(format!("{rsid}: does not lift over to {}", kb.as_str()));
+            Ok((None, None))
+        }
+        Err(e) => {
+            v.warnings.push(format!("{rsid}: liftover failed: {e}"));
+            Ok((None, None))
+        }
+    }
+}
+
+/// Rows for one `--rsid`: observed in the kit, else resolved by position.
+fn lookup_rsid(v: &mut KitView, lifter: &mut crate::liftover::Lifter, rsid: &str) -> Result<Vec<Record>> {
+    let kb = v.build();
+    let kit_id = v.kit.id.clone();
+    let found = if v.kit.rsid_records > 0 { v.reader.by_rsid(rsid)? } else { Vec::new() };
+    if !found.is_empty() {
+        return found
+            .into_iter()
+            .map(|c| Ok(genotype_row(&kit_id, &v.enrich_array(c)?, kb, "observed", None)))
+            .collect();
+    }
+    let (coord, lifted_from) = rsid_coord(v, lifter, rsid)?;
+    let Some(k) = coord else {
+        v.warnings.push(format!(
+            "{rsid}: not in kit and no coordinates known (bundled table covers curated SNPs; \
+             run `genome rsid-table import DBSNP_VCF` for full backfill)"
+        ));
+        let c = Call { rsid: Some(rsid.to_string()), zygosity: Some(Zygosity::NoCall), ..Call::default() };
+        return Ok(vec![genotype_row(&kit_id, &c, kb, "missing", None)]);
+    };
+    if !v.kit.has_rsids {
+        v.warnings.push(format!(
+            "{rsid}: kit has no rsids; resolved via {} table to {}:{} ({})",
+            k.source,
+            k.chrom,
+            k.pos,
+            kb.as_str()
+        ));
+    }
+    Ok(v.at(&k.chrom, k.pos, Some(rsid), k.reference.as_deref(), &k.alt)?
+        .into_iter()
+        .map(|(c, src)| genotype_row(&kit_id, &c, kb, src, lifted_from))
+        .collect())
+}
+
+/// Rows for one `--pos CHR:POS` given in QBUILD (lifted to the kit's build when different).
+fn lookup_pos(v: &mut KitView, lifter: &mut crate::liftover::Lifter, p: &str, qbuild: Build) -> Result<Vec<Record>> {
+    let kb = v.build();
+    let kit_id = v.kit.id.clone();
+    let (chrom, pos) = parse_locus(p).ok_or_else(|| AppError::usage(format!("bad position '{p}' (expected CHR:POS)")))?;
+    let mut lifted_from = None;
+    let (chrom, pos) = if qbuild != kb && qbuild != Build::Unknown && kb != Build::Unknown {
+        let Some(l) = lifter.lift(qbuild, kb, &chrom, pos)? else {
+            v.warnings.push(format!("{p}: does not lift over from {} to {}", qbuild.as_str(), kb.as_str()));
+            let c = Call { chrom, pos, zygosity: Some(Zygosity::NoCall), ..Call::default() };
+            return Ok(vec![genotype_row(&kit_id, &c, qbuild, "missing", None)]);
+        };
+        lifted_from = Some((qbuild, pos));
+        (l.chrom, l.pos)
+    } else {
+        (chrom, pos)
+    };
+    let coord = v.resolver.at(kb, &chrom, pos)?;
+    let (rsid, rf, alt) = match &coord {
+        Some(k) => (Some(k.rsid.as_str()), k.reference.as_deref(), k.alt.clone()),
+        None => (None, None, Vec::new()),
+    };
+    Ok(v.at(&chrom, pos, rsid, rf, &alt)?
+        .into_iter()
+        .map(|(c, src)| genotype_row(&kit_id, &c, kb, src, lifted_from))
+        .collect())
+}
+
 pub fn run(ctx: &Ctx, a: LookupArgs) -> Result<()> {
     let db = ctx.db()?;
     let kit = store::get(&db, &a.kit)?;
@@ -152,86 +246,16 @@ pub fn run(ctx: &Ctx, a: LookupArgs) -> Result<()> {
     let mut lifter = ctx.lifter();
     let mut v = KitView::open(ctx, kit, &mut resolver)?;
     let kb = v.build();
-    let kit_id = v.kit.id.clone();
     let mut rows: Vec<Record> = Vec::new();
     for rsid in &a.rsid {
-        let rsid = rsid.trim();
-        let found = if v.kit.rsid_records > 0 { v.reader.by_rsid(rsid)? } else { Vec::new() };
-        if !found.is_empty() {
-            for c in found {
-                let c = v.enrich_array(c)?;
-                rows.push(genotype_row(&kit_id, &c, kb, "observed", None));
-            }
-            continue;
-        }
-        // Resolve coordinates in the kit's build, or in the other build and lift.
-        let mut lifted_from = None;
-        let mut coord = if kb == Build::Unknown { None } else { v.resolver.resolve(rsid, kb)? };
-        if coord.is_none() && kb != Build::Unknown {
-            if let Some(o) = v.resolver.resolve(rsid, kb.other())? {
-                match lifter.lift(kb.other(), kb, &o.chrom, o.pos) {
-                    Ok(Some(l)) => {
-                        lifted_from = Some((kb.other(), o.pos));
-                        coord = Some(crate::rsids::Coord { chrom: l.chrom, pos: l.pos, reference: None, ..o });
-                    }
-                    Ok(None) => v.warnings.push(format!("{rsid}: does not lift over to {}", kb.as_str())),
-                    Err(e) => v.warnings.push(format!("{rsid}: liftover failed: {e}")),
-                }
-            }
-        }
-        match coord {
-            Some(k) => {
-                if !v.kit.has_rsids {
-                    v.warnings.push(format!(
-                        "{rsid}: kit has no rsids; resolved via {} table to {}:{} ({})",
-                        k.source,
-                        k.chrom,
-                        k.pos,
-                        kb.as_str()
-                    ));
-                }
-                for (c, src) in v.at(&k.chrom, k.pos, Some(rsid), k.reference.as_deref(), &k.alt)? {
-                    rows.push(genotype_row(&kit_id, &c, kb, src, lifted_from));
-                }
-            }
-            None => {
-                v.warnings.push(format!(
-                    "{rsid}: not in kit and no coordinates known (bundled table covers curated SNPs; \
-                     run `genome rsid-table import DBSNP_VCF` for full backfill)"
-                ));
-                let c = Call { rsid: Some(rsid.to_string()), zygosity: Some(Zygosity::NoCall), ..Call::default() };
-                rows.push(genotype_row(&kit_id, &c, kb, "missing", None));
-            }
-        }
+        rows.extend(lookup_rsid(&mut v, &mut lifter, rsid.trim())?);
     }
     let qbuild = match a.build.as_deref() {
         Some(b) => Build::parse(b).ok_or_else(|| AppError::usage(format!("unknown build '{b}'")))?,
         None => kb,
     };
     for p in &a.pos {
-        let (chrom, pos) =
-            parse_locus(p).ok_or_else(|| AppError::usage(format!("bad position '{p}' (expected CHR:POS)")))?;
-        let (chrom, pos, lifted_from) = if qbuild != kb && qbuild != Build::Unknown && kb != Build::Unknown {
-            match lifter.lift(qbuild, kb, &chrom, pos)? {
-                Some(l) => (l.chrom, l.pos, Some((qbuild, pos))),
-                None => {
-                    v.warnings.push(format!("{p}: does not lift over from {} to {}", qbuild.as_str(), kb.as_str()));
-                    let c = Call { chrom, pos, zygosity: Some(Zygosity::NoCall), ..Call::default() };
-                    rows.push(genotype_row(&kit_id, &c, qbuild, "missing", None));
-                    continue;
-                }
-            }
-        } else {
-            (chrom, pos, None)
-        };
-        let coord = v.resolver.at(kb, &chrom, pos)?;
-        let (rsid, rf, alt) = match &coord {
-            Some(k) => (Some(k.rsid.as_str()), k.reference.as_deref(), k.alt.clone()),
-            None => (None, None, Vec::new()),
-        };
-        for (c, src) in v.at(&chrom, pos, rsid, rf, &alt)? {
-            rows.push(genotype_row(&kit_id, &c, kb, src, lifted_from));
-        }
+        rows.extend(lookup_pos(&mut v, &mut lifter, p, qbuild)?);
     }
     let warnings = std::mem::take(&mut v.warnings);
     ctx.emit(&Report::new("genotypes", rows).table_columns(GENOTYPE_TABLE_COLUMNS).warnings(dedup(warnings)))
