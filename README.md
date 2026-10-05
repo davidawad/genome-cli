@@ -2,7 +2,7 @@
 
 Rust CLI (`genome`) for personal genomic data: genotyping-array exports,
 whole-genome VCFs and raw FASTQ reads, normalized into one genotype model.
-Sibling of [biomarker-cli](https://gitlab.com/davidawad/biomarker-cli); feeds
+Sibling of [biomarker-cli](https://github.com/davidawad/biomarker-cli); feeds
 genetics.el through the versioned [`genome/v1` JSON contract](docs/json-schema.md).
 
 ![genome importing a 23andMe export and a GRCh38 WGS VCF, then summary, an APOE lookup and a cross-build compare](docs/screenshots/tour.svg)
@@ -173,7 +173,7 @@ each with a `.sha256` file plus one combined `SHA256SUMS`:
 
 ```sh
 # Linux / macOS
-tag=v0.2.0 target=aarch64-apple-darwin   # pick your row above
+tag=v0.3.1 target=aarch64-apple-darwin   # pick your row above
 base=https://github.com/davidawad/genome-cli/releases/download/$tag
 curl -LO "$base/genome-$tag-$target.tar.gz" -LO "$base/genome-$tag-$target.tar.gz.sha256"
 shasum -a 256 -c "genome-$tag-$target.tar.gz.sha256"     # or sha256sum -c
@@ -183,7 +183,7 @@ install -m 755 "genome-$tag-$target/genome" ~/.local/bin/  # or /usr/local/bin
 
 ```powershell
 # Windows (PowerShell)
-$tag = "v0.2.0"; $name = "genome-$tag-x86_64-pc-windows-msvc"
+$tag = "v0.3.1"; $name = "genome-$tag-x86_64-pc-windows-msvc"
 $base = "https://github.com/davidawad/genome-cli/releases/download/$tag"
 Invoke-WebRequest "$base/$name.zip" -OutFile "$name.zip"
 Invoke-WebRequest "$base/$name.zip.sha256" -OutFile "$name.zip.sha256"
@@ -195,64 +195,21 @@ Expand-Archive "$name.zip" -DestinationPath .
 macOS may quarantine a downloaded binary; `xattr -d com.apple.quarantine genome`
 clears it (Homebrew does this for you).
 
-**Homebrew** (macOS, Linux): `brew install OWNER/TAP/genome-cli`, from the
-separate tap (substitute its name). The formula currently builds from source
-with `depends_on arch: :arm64`, because Homebrew's cargo is stable and stable
-cannot build fsqlite on x86_64 (see [Building](#building)). It should switch to
-the release archives, which removes both the Rust build dependency and the
-architecture restriction; the tap lives elsewhere and is not changed here:
+**Homebrew** (macOS and Linux, arm64 and x86_64):
 
-```ruby
-class GenomeCli < Formula
-  desc "Personal genomic data (array exports, WGS VCFs, FASTQ) in one genotype model"
-  homepage "https://gitlab.com/davidawad/genome-cli"
-  version "0.2.0"
-  license "MIT"
-  base = "https://github.com/davidawad/genome-cli/releases/download/v#{version}/genome-v#{version}"
-
-  on_macos do
-    on_arm do
-      url "#{base}-aarch64-apple-darwin.tar.gz"
-      sha256 "<from genome-v0.2.0-aarch64-apple-darwin.tar.gz.sha256>"
-    end
-    on_intel do
-      url "#{base}-x86_64-apple-darwin.tar.gz"
-      sha256 "<from ...x86_64-apple-darwin.tar.gz.sha256>"
-    end
-  end
-  on_linux do
-    on_arm do
-      url "#{base}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "<from ...aarch64-unknown-linux-gnu.tar.gz.sha256>"
-    end
-    on_intel do
-      url "#{base}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "<from ...x86_64-unknown-linux-gnu.tar.gz.sha256>"
-    end
-  end
-
-  def install
-    bin.install "genome"
-    generate_completions_from_executable(bin/"genome", "completions")
-    system bin/"genome", "man", "--dir", man1
-  end
-
-  test do
-    assert_match version.to_s, shell_output("#{bin}/genome --version")
-  end
-end
+```sh
+brew install davidawad/tap/genome-cli
 ```
 
-Drop `depends_on arch: :arm64` and `depends_on "rust" => :build`; on each
-release, copy the four `sha256` values from `SHA256SUMS` (`brew bump-formula-pr`
-does not handle per-arch URLs, so edit them by hand or with a small script).
+The formula installs the prebuilt release binary for your platform, so no
+Rust toolchain is needed. On Windows, use the release zip above.
 
 **cargo install** (from source): x86_64 and Windows need a nightly toolchain,
 aarch64 builds on stable (see [Building](#building)).
 
 ```sh
-cargo +nightly install --locked --git https://gitlab.com/davidawad/genome-cli   # x86_64 Linux/macOS, Windows
-cargo install --locked --git https://gitlab.com/davidawad/genome-cli            # aarch64 Linux/macOS
+cargo +nightly install --locked --git https://github.com/davidawad/genome-cli   # x86_64 Linux/macOS, Windows
+cargo install --locked --git https://github.com/davidawad/genome-cli            # aarch64 Linux/macOS
 ```
 
 The FASTQ pipeline additionally needs minimap2, samtools and bcftools, which
