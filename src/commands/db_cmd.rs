@@ -21,13 +21,6 @@ pub fn run(ctx: &Ctx, cmd: DbCmd) -> Result<()> {
         DbCmd::Init { encrypt: _, kek } => init(ctx, kek.as_deref()),
         DbCmd::Encrypt { kek } => encrypt(ctx, kek.as_deref()),
         DbCmd::Rekey { kek } => rekey(ctx, kek.as_deref()),
-        DbCmd::Unlock => {
-            let env = sealed_envelope(ctx)?;
-            env.cache_session()?;
-            ctx.info("database key cached in the OS keyring until `genome db lock`");
-            ctx.audit("db unlock", json!({}))?;
-            status(ctx)
-        }
         DbCmd::Lock => lock(ctx),
         DbCmd::Status => status(ctx),
     }
@@ -223,15 +216,7 @@ fn lock(ctx: &Ctx) -> Result<()> {
     for p in &stale {
         crypto::shred(p)?;
     }
-    let session = match db::inspect(&ctx.db_path) {
-        DbFile::Sealed => db::read_envelope(&ctx.db_path)?.clear_session().unwrap_or(false),
-        _ => false,
-    };
-    ctx.info(&format!(
-        "locked: {} cached key removed; {} stale temporary files shredded",
-        if session { "1" } else { "no" },
-        stale.len()
-    ));
+    ctx.info(&format!("locked: {} stale temporary files shredded", stale.len()));
     status(ctx)
 }
 

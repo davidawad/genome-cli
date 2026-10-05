@@ -186,7 +186,7 @@ pub const SETTINGS: &[Setting] = &[
         env: &["GENOME_KEK"],
         help:
             "key for new encrypted databases (auto: GENOME_KEY if set, else your SSH key after asking, else a key file)",
-        choices: &["auto", "ssh", "file", "passphrase", "keyring"],
+        choices: &["auto", "ssh", "file", "passphrase"],
         kind: Kind::Str,
     },
     Setting {
@@ -384,11 +384,17 @@ fn join_managed(head: &str, block: &str) -> String {
     }
 }
 
+/// Write the config file owner-only (0600; a current-user ACL on Windows): it
+/// names the keys that decrypt the data and where they live.
 fn write_config(path: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, text).map_err(|e| AppError::io(format!("writing {}: {e}", path.display())))
+    let werr = |e: std::io::Error| AppError::io(format!("writing {}: {e}", path.display()));
+    let mut f = crate::platform::perms::create_private(path).map_err(werr)?;
+    crate::platform::perms::restrict_file(path).map_err(werr)?;
+    f.write_all(text.as_bytes()).map_err(werr)
 }
 
 /// Replace (or add) the managed `[encryption]` section, keeping the rest.

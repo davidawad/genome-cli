@@ -331,7 +331,7 @@ its source; `genome config keys` lists keys and env names.
 | `threads`, `aligner`, `caller`, `container`, `reference` | `GENOME_THREADS`, ... | 4, `minimap2`, `bcftools`, `auto`, `GRCh38` |
 | `reference_grch37`, `reference_grch38` | | optional FASTA (+`.fai`) used to fill reference alleles for `inferred_ref` and array sites |
 | `ucsc_url`, `reference_url`, `offline` | `GENOME_OFFLINE` | UCSC goldenPath, NCBI no-alt set, false |
-| `kek` | `GENOME_KEK` | `auto`: key for new encrypted databases (`GENOME_KEY`, else your SSH key after asking, else a key file); `ssh`, `file`, `passphrase`, `keyring` |
+| `kek` | `GENOME_KEK` | `auto`: key for new encrypted databases (`GENOME_KEY`, else your SSH key after asking, else a key file); `ssh`, `file`, `passphrase` |
 | `insecure_plaintext` | `GENOME_INSECURE_PLAINTEXT` | false; store data unencrypted (warns every run) |
 
 ### Default locations
@@ -373,7 +373,8 @@ Linux and Windows alike): it shows the key and fingerprint and asks
 `Encrypt with this SSH key? [Y/n]`. No SSH key, or you say no: it makes an
 owner-only key file instead, outside the data directory. If your SSH key has a
 passphrase, it also adds a key file so you are not asked for it every run; the
-SSH key stays your recovery key. No OS keychain prompts. With `GENOME_KEY`
+SSH key stays your recovery key. genome-cli never uses an OS keychain, so
+there are no keychain prompts and the same keys work on any machine. With `GENOME_KEY`
 set (CI, scripts) a passphrase is used instead.
 
 genome-cli then keeps an `[encryption]` section in its own config file
@@ -393,7 +394,7 @@ has its own encryption layer.
 genome db init                        # encrypted with your SSH key (asks first), else a key file
 genome key status                     # which keys can decrypt the data, and are they here
 genome key add-ssh ~/backup_key.pub   # let another SSH key decrypt it too
-genome db rekey --to ssh              # move a 0.2 (OS keychain) database to your SSH key
+genome db rekey --to ssh              # switch an existing database (e.g. a passphrase one) to your SSH key
 genome db encrypt                     # migrate an existing plaintext database in place
 genome audit log --limit 20
 genome export wgs --format vcf -o wgs.vcf.enc --encrypt-output   # GENOME_EXPORT_KEY or prompt
@@ -472,12 +473,9 @@ a synthetic reference with planted SNPs and runs the real
 minimap2/samtools/bcftools pipeline when they are installed. Tests that need
 something absent print a `SKIPPED ...` line and pass: the pipeline e2e
 (tools missing, e.g. on Windows), the README sample check (needs bash and
-python3; Unix only) and the OS keyring round trip (runs only with
-`GENOME_TEST_KEYRING=1`, as in CI, and where a credential store is
-reachable). Key-slot tests generate throwaway SSH keys in-process and run on
-every OS; they never read `~/.ssh` or touch the OS keyring
-(`GENOME_SSH_DIR`, `GENOME_KEY_DIR`, `GENOME_NO_KEYRING`, and a directory
-standing in for the keyring, `GENOME_TEST_KEYSTORE_DIR`). No real person's
+python3; Unix only). Key-slot tests generate throwaway SSH keys in-process
+and run on every OS; they never read `~/.ssh` (`GENOME_SSH_DIR`,
+`GENOME_KEY_DIR`). No real person's
 genome is fetched or used.
 
 ## License

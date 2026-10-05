@@ -1,8 +1,8 @@
 //! Key slots end to end: first run with the user's SSH key (no setup), key
-//! files for passphrase-protected SSH keys, recovery, `genome key ...`, and
-//! migrating a 0.2 OS-keyring database. Throwaway SSH keys are generated
-//! in-process; the real ~/.ssh and the real OS keyring are never touched
-//! (GENOME_SSH_DIR, GENOME_KEY_DIR, GENOME_NO_KEYRING, GENOME_TEST_KEYSTORE_DIR).
+//! files for passphrase-protected SSH keys, recovery, `genome key ...`, 0.2
+//! OS-keychain stores (refused, with an explanation) and the pre-0.2 macOS
+//! data directory. Throwaway SSH keys are generated in-process; the real
+//! ~/.ssh is never read (GENOME_SSH_DIR, GENOME_KEY_DIR).
 
 use std::path::{Path, PathBuf};
 
@@ -63,7 +63,6 @@ impl Env {
             .env("GENOME_CACHE_DIR", self.path("cache"))
             .env("GENOME_KEY_DIR", self.path("keys"))
             .env("GENOME_SSH_DIR", self.ssh_dir())
-            .env("GENOME_NO_KEYRING", "1")
             .env("GENOME_OFFLINE", "1")
             .env("GENOME_INSECURE_FAST_KDF", "1")
             .env("NO_COLOR", "1");
@@ -222,25 +221,66 @@ fn key_add_and_remove() {
     assert_eq!(enc["passphrase"].as_bool(), Some(false));
 }
 
+/// A container written by genome-cli 0.2 whose key was in the OS keychain.
+fn write_v02_keychain_store(path: &Path) {
+    let envelope = br#"{"v":1,"cipher":"xchacha20poly1305","db_id":"00112233445566778899aabbccddeeff","kek":"keyring","keyring_account":"db:00112233445566778899aabbccddeeff","wrapped_dek":"00","created_at":"2026-10-01T00:00:00Z"}"#;
+    let mut bytes = b"GNMDBSE1".to_vec();
+    bytes.extend_from_slice(&(envelope.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(envelope);
+    bytes.extend_from_slice(&[0u8; 64]);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
 #[test]
-fn legacy_keyring_database_migrates_to_the_ssh_key() {
+fn os_keychain_stores_are_refused_with_an_explanation() {
     let e = Env::new();
-    let store = e.path("keystore");
-    let keyring = |c: &mut Command| {
-        c.env_remove("GENOME_NO_KEYRING").env("GENOME_TEST_KEYSTORE_DIR", &store);
-    };
-    let mut c = e.cmd();
-    keyring(&mut c);
-    e.run_with(&mut c, &["db", "init", "--kek", "keyring"]);
-    assert_eq!(std::fs::read_dir(&store).unwrap().count(), 1);
+    write_v02_keychain_store(&e.path("data").join("genome.db"));
+    let (code, err) = e.fail(&mut e.cmd(), &["kits"]);
+    assert_eq!(code, 10, "{err}");
+    assert!(err.contains("OS keychain") && err.contains("--kek passphrase"), "{err}");
+    let (o, _) = e.run(&["key", "status", "--format", "json"]);
+    assert!(o.contains("unsupported"), "{o}");
+}
+
+#[test]
+fn config_file_is_owner_only() {
+    let e = Env::new();
     ssh_key(&e.ssh_dir(), "id_ed25519", None);
-    let mut c = e.cmd();
-    keyring(&mut c);
-    let (_, err) = e.run_with(&mut c, &["db", "rekey", "--to", "ssh"]);
-    assert!(err.contains("keyring -> ssh"), "{err}");
-    assert_eq!(std::fs::read_dir(&store).unwrap().count(), 0, "the keyring entry is deleted");
-    e.run(&["kits"]); // no keyring needed any more
-    assert!(std::fs::read_to_string(e.config()).unwrap().contains("legacy_keyring = false"));
+    e.import();
+    let access = check_private(&e.config());
+    assert!(matches!(access, Access::Private(_)), "{access:?}");
+}
+
+/// The pre-0.2 macOS layout (~/.local/share/genome-cli) only ever existed on
+/// macOS; elsewhere the "legacy" location is the native one.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_legacy_store_is_used_and_never_shadowed() {
+    let e = Env::new();
+    let home = e.path("home");
+    let legacy = home.join(".local").join("share").join("genome-cli");
+    let native = home.join("Library").join("Application Support").join("genome-cli");
+    let plain = |e: &Env| {
+        let mut c = e.cmd();
+        c.env("HOME", &home).env_remove("XDG_CONFIG_HOME").env_remove("GENOME_DATA_DIR");
+        c
+    };
+    // A store in the legacy location (made there explicitly, like 0.1 did).
+    ssh_key(&e.ssh_dir(), "id_ed25519", None);
+    let f = fixture("23andme_male.txt");
+    e.run_with(plain(&e).env("GENOME_DATA_DIR", &legacy), &["import", f.to_str().unwrap(), "--name", "legacykit"]);
+    // The config file lands in the native dir (that is the macOS config dir).
+    e.run_with(&mut plain(&e), &["config", "set", "format", "json"]);
+    assert!(native.join("config.toml").exists());
+    let (o, _) = e.run_with(&mut plain(&e), &["kits"]);
+    assert!(o.contains("legacykit"), "{o}");
+    assert!(!native.join("genome.db").exists(), "no new database in the native dir");
+    // Pointing at the empty native dir explicitly is refused, not silently empty.
+    let (code, err) = e.fail(plain(&e).arg("--data-dir").arg(&native), &["kits"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("refusing to create a new, empty database"), "{err}");
+    assert!(!native.join("genome.db").exists());
 }
 
 #[test]

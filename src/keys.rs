@@ -10,12 +10,12 @@
 //!   directory, like an ssh key ([`crate::keyfile`]). Added next to an `ssh`
 //!   slot when the SSH key has a passphrase, so daily use never prompts.
 //! - `passphrase`: Argon2id(passphrase, salt), from `GENOME_KEY` or a prompt.
-//! - `keyring`: legacy (0.2): a KEK in the OS credential store. Still read so
-//!   `genome db rekey --to ssh` can migrate away; new ones only on request.
 //!
-//! Unlock order: key file -> SSH key -> `GENOME_KEY` -> legacy keyring ->
-//! passphrase prompt. The OS keyring is never touched unless a slot (or a
-//! `db unlock` session) uses it.
+//! genome-cli never uses an OS keychain or credential store. Stores from 0.2
+//! and earlier that were wrapped by the OS keychain (a `keyring` slot) are
+//! recognised and refused with an explanation.
+//!
+//! Unlock order: key file -> SSH key -> `GENOME_KEY` -> passphrase prompt.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -26,7 +26,6 @@ use zeroize::Zeroizing;
 use crate::crypto::{self, hex, unhex, KdfParams, Key};
 use crate::error::{AppError, ErrorKind, Result};
 use crate::keyfile;
-use crate::platform::keystore::{self, SERVICE as KEYRING_SERVICE};
 use crate::prompt::{Prompter, Tty};
 use crate::sshkey::{self, SshKey};
 
@@ -42,6 +41,7 @@ pub enum SlotKind {
     Ssh,
     File,
     Passphrase,
+    /// genome <= 0.2 kept the KEK in the OS keychain; no longer supported.
     Keyring,
 }
 
@@ -155,10 +155,6 @@ pub fn passphrase(env_var: &str, prompt: &str, confirm: bool) -> Result<Zeroizin
     Ok(p)
 }
 
-fn session_account(db_id: &str) -> String {
-    format!("session:{db_id}")
-}
-
 // ---------------------------------------------------------------------------
 // Making slots
 // ---------------------------------------------------------------------------
@@ -193,13 +189,6 @@ pub fn passphrase_slot(db_id: &str, dek: &Key, pass_env: &str) -> Result<Slot> {
 pub fn file_slot(db_id: &str, dek: &Key) -> Result<Slot> {
     let (kek, key_file) = keyfile::create(db_id)?;
     Ok(Slot { key_file, ..sealed_slot(SlotKind::File, &kek, db_id, dek)? })
-}
-
-fn keyring_slot(db_id: &str, dek: &Key) -> Result<Slot> {
-    let kek = Key::random()?;
-    let account = format!("db:{db_id}");
-    keystore::set(&account, &kek)?;
-    Ok(Slot { keyring_account: Some(account), ..sealed_slot(SlotKind::Keyring, &kek, db_id, dek)? })
 }
 
 /// An SSH slot for a public key line (`identity`: where its private key lives, if known).
@@ -259,12 +248,11 @@ fn auto_slots(db_id: &str, dek: &Key, ui: &dyn Prompter) -> Result<Vec<Slot>> {
 
 /// Slots for a new or re-keyed database. `pref`: `auto` (`pass_env` set ->
 /// passphrase; else the SSH key, asking first; else a key file), `ssh`,
-/// `file`, `passphrase` or `keyring`.
+/// `file` or `passphrase`.
 pub fn choose_slots(pref: &str, db_id: &str, dek: &Key, pass_env: &str, ui: &dyn Prompter) -> Result<Vec<Slot>> {
     match pref {
         "passphrase" => passphrase_slot(db_id, dek, pass_env).map(|s| vec![s]),
         "file" => file_slot(db_id, dek).map(|s| vec![s]),
-        "keyring" => keyring_slot(db_id, dek).map(|s| vec![s]),
         "ssh" => match sshkey::discover() {
             (Some(k), _) => ssh_slots(&k, db_id, dek),
             (None, notes) => Err(no_ssh_key(&notes)),
@@ -405,16 +393,16 @@ impl Envelope {
         self.unlock_with(&Tty).map(|u| u.dek)
     }
 
-    /// Try each slot in order (key file, SSH, `GENOME_KEY`, keyring, prompt).
+    /// Try each slot in order (key file, SSH, `GENOME_KEY`, prompt).
     pub fn unlock_with(&self, ui: &dyn Prompter) -> Result<Unlocked> {
+        if self.slots.iter().all(|s| s.kind == SlotKind::Keyring) {
+            return Err(crypto_err(KEYCHAIN_UNSUPPORTED));
+        }
         let mut why = Vec::new();
-        let steps: [Step; 5] = [
-            &|w| self.try_files(w),
-            &|w| self.try_ssh(ui, w),
-            &|w| self.try_env_passphrase(w),
-            &|w| self.try_keyring(w),
-            &|w| self.try_prompt(w),
-        ];
+        let steps: [Step; 4] =
+            [&|w| self.try_files(w), &|w| self.try_ssh(ui, w), &|w| self.try_env_passphrase(w), &|w| {
+                self.try_prompt(w)
+            }];
         for step in steps {
             if let Some(u) = step(&mut why) {
                 return Ok(u);
@@ -486,31 +474,6 @@ impl Envelope {
         })
     }
 
-    fn try_keyring(&self, why: &mut Vec<String>) -> Option<Unlocked> {
-        if let Some(u) = self.try_session() {
-            return Some(u);
-        }
-        self.slots_of(SlotKind::Keyring).find_map(|s| {
-            let account = s.keyring_account.as_deref().unwrap_or_default();
-            let r = keystore::get(account)
-                .and_then(|k| {
-                    k.ok_or_else(|| crypto_err(format!("OS keyring has no entry '{KEYRING_SERVICE}/{account}'")))
-                })
-                .and_then(|kek| self.unwrap_with(s, &kek));
-            self.found(s, r, why)
-        })
-    }
-
-    /// A passphrase KEK cached by `db unlock` (only if one was cached).
-    fn try_session(&self) -> Option<Unlocked> {
-        if std::env::var_os(KEY_ENV).is_some() || !keyfile::session_marker(&self.db_id).exists() {
-            return None;
-        }
-        let kek = keystore::get(&session_account(&self.db_id)).ok()??;
-        self.slots_of(SlotKind::Passphrase)
-            .find_map(|s| self.unwrap_with(s, &kek).ok().map(|dek| Unlocked { dek, slot: s.id.clone() }))
-    }
-
     fn try_prompt(&self, why: &mut Vec<String>) -> Option<Unlocked> {
         if std::env::var_os(KEY_ENV).is_some() {
             return None;
@@ -522,56 +485,21 @@ impl Envelope {
         self.found(s, r, why)
     }
 
-    /// Cache the passphrase-derived KEK in the OS keyring (`db unlock`, opt-in).
-    pub fn cache_session(&self) -> Result<()> {
-        let s = self.slots_of(SlotKind::Passphrase).next().ok_or_else(|| {
-            AppError::usage(format!("this database has no passphrase to cache (keys: {})", self.kinds()))
-        })?;
-        let pass = passphrase(KEY_ENV, "Database passphrase: ", false)?;
-        let kek = Self::passphrase_kek(s, &pass)?;
-        self.unwrap_with(s, &kek)?;
-        keystore::set(&session_account(&self.db_id), &kek)?;
-        let marker = keyfile::session_marker(&self.db_id);
-        crate::platform::perms::private_dir(marker.parent().expect("key dir"))?;
-        crate::platform::perms::create_private(&marker)?;
-        Ok(())
-    }
-
-    /// Remove a cached session (`db lock`). Returns whether one existed. The
-    /// OS keyring is only touched when `db unlock` left a session marker.
-    pub fn clear_session(&self) -> Result<bool> {
-        let marker = keyfile::session_marker(&self.db_id);
-        if !marker.exists() {
-            return Ok(false);
-        }
-        let _ = std::fs::remove_file(&marker);
-        keystore::delete(&session_account(&self.db_id))
-    }
-
-    /// Remove what only `old` used and `self` no longer does: keyring
-    /// entries, default key files, a cached passphrase session.
+    /// Remove default key files that only `old` used.
     pub fn retire_unused(&self, old: &Envelope) {
-        for s in old.slots.iter().filter(|s| !self.slots.iter().any(|n| n.id == s.id)) {
-            retire_slot(&old.db_id, s, self.has(SlotKind::File));
-        }
-        if !self.has(SlotKind::Passphrase) {
-            let _ = old.clear_session();
+        let gone = old.slots.iter().filter(|s| !self.slots.iter().any(|n| n.id == s.id));
+        for s in gone.filter(|s| s.kind == SlotKind::File && !self.has(SlotKind::File)) {
+            let _ = keyfile::retire(&old.db_id, s.key_file.as_deref());
         }
     }
 }
 
-/// Clean up after a slot that is gone (best effort).
-pub fn retire_slot(db_id: &str, s: &Slot, file_still_used: bool) {
-    match s.kind {
-        SlotKind::Keyring => {
-            let _ = keystore::delete(s.keyring_account.as_deref().unwrap_or_default());
-        }
-        SlotKind::File if !file_still_used => {
-            let _ = keyfile::retire(db_id, s.key_file.as_deref());
-        }
-        _ => {}
-    }
-}
+/// Why a store wrapped by the OS keychain (genome <= 0.2) cannot be opened.
+pub const KEYCHAIN_UNSUPPORTED: &str =
+    "this database was created by genome-cli 0.2 or earlier, which kept its key in the \
+OS keychain; genome-cli no longer uses OS keychains (keys are your SSH key, a key file or a passphrase). To keep the \
+data: with genome-cli 0.2, run `genome db rekey --kek passphrase`; then, with this version, open it with GENOME_KEY \
+set and run `genome db rekey --to ssh`";
 
 // ---------------------------------------------------------------------------
 // Passphrase-sealed exports (`--encrypt-output`, `genome decrypt`)
@@ -632,7 +560,6 @@ pub mod testenv {
         std::fs::create_dir(&ssh).unwrap();
         std::env::set_var(sshkey::SSH_DIR_ENV, &ssh);
         std::env::set_var("GENOME_KEY_DIR", dir.path().join("keys"));
-        std::env::set_var(keystore::NO_KEYRING_ENV, "1");
         for v in [KEY_ENV, NEW_KEY_ENV, sshkey::SSH_KEY_ENV, sshkey::SSH_PASS_ENV, keyfile::KEY_FILE_ENV] {
             std::env::remove_var(v);
         }
@@ -711,6 +638,8 @@ mod tests {
         assert_eq!(env.slots[0].keyring_account.as_deref(), Some("db:ab"));
         let json = serde_json::to_string(&env).unwrap();
         assert!(!json.contains("\"kek\"") && json.contains("\"slots\""), "{json}");
+        let e = env.unlock_with(&Scripted::new(false, &[])).err().unwrap();
+        assert!(e.message.contains("OS keychain") && e.message.contains("--kek passphrase"), "{}", e.message);
     }
 
     #[test]

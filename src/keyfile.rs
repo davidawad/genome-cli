@@ -166,12 +166,6 @@ pub fn retire(db_id: &str, recorded: Option<&str>) -> Result<bool> {
     }
 }
 
-/// Marker meaning `db unlock` cached a passphrase session in the OS keyring,
-/// so the keyring is only consulted when the user asked for it.
-pub fn session_marker(db_id: &str) -> PathBuf {
-    dirs::key_dir().join(format!("{db_id}.session"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -130,6 +130,24 @@ impl Ctx {
         *self.security.lock().expect("not poisoned") = Some(s);
     }
 
+    /// Never create a new, empty database in front of an existing pre-0.2
+    /// macOS store (it would hide the user's data).
+    fn refuse_to_shadow_legacy_store(&self) -> Result<()> {
+        match crate::platform::dirs::shadowed_legacy_store(&self.data_dir) {
+            Some(old) => Err(AppError::new(
+                ErrorKind::Config,
+                format!(
+                    "your genome-cli data is in {} but the data directory is {}; refusing to create a new, empty \
+                     database there. Use the existing data with GENOME_DATA_DIR={} (or `genome config set data_dir`)",
+                    old.display(),
+                    self.data_dir.display(),
+                    old.display()
+                ),
+            )),
+            None => Ok(()),
+        }
+    }
+
     /// Open the kit database: an encrypted (sealed, in-memory) database by
     /// default, created on first use; a plaintext one only with `--insecure-plaintext`.
     pub fn db(&self) -> Result<Db> {
@@ -137,6 +155,7 @@ impl Ctx {
         match crate::db::inspect(&self.db_path) {
             DbFile::Missing if self.insecure_plaintext() => self.open_plain(),
             DbFile::Missing => {
+                self.refuse_to_shadow_legacy_store()?;
                 let (envelope, dek) = Envelope::create(self.get("kek"), &crate::prompt::Tty)?;
                 let db = Db::open_sealed(&self.db_path, envelope.clone(), dek.clone())?;
                 crate::setup::announce(self, &envelope);

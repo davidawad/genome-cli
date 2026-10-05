@@ -8,8 +8,11 @@
 //!
 //! `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_CACHE_HOME` (absolute paths)
 //! override the OS convention everywhere. Releases up to 0.1 used the
-//! XDG-style layout on macOS too: when the native macOS location does not
-//! exist but the old one does, the old one is used (see [`Dir::legacy`]).
+//! XDG-style layout on macOS too: when the native macOS location holds no
+//! database (`genome.db`) but the old one does, the old one is used (see
+//! [`Dir::legacy`]). On macOS the native config and data directories are the
+//! same, so the test is the database file, never the directory: writing the
+//! config file must not make an empty native location win.
 
 use std::path::{Path, PathBuf};
 
@@ -76,7 +79,11 @@ impl Dir {
             return p;
         }
         let native = self.native();
-        let probe = |d: &Path| if self == Self::Config { d.join(CONFIG_FILE) } else { d.to_path_buf() };
+        let probe = |d: &Path| match self {
+            Self::Config => d.join(CONFIG_FILE),
+            Self::Data => d.join(DB_FILE),
+            Self::Cache => d.to_path_buf(),
+        };
         match self.legacy() {
             Some(old) => pick(native, old, probe),
             None => native,
@@ -85,6 +92,20 @@ impl Dir {
 }
 
 pub const CONFIG_FILE: &str = "config.toml";
+pub const DB_FILE: &str = "genome.db";
+
+/// A pre-0.2 macOS store that a database at `data_dir` would shadow: set
+/// when `data_dir` is the native location, holds no database, and the legacy
+/// location does. A new database must never be created over it.
+pub fn shadowed_legacy_store(data_dir: &Path) -> Option<PathBuf> {
+    let legacy = Dir::Data.legacy()?;
+    shadowed(data_dir, &Dir::Data.native(), &legacy)
+}
+
+fn shadowed(data_dir: &Path, native: &Path, legacy: &Path) -> Option<PathBuf> {
+    let unused = data_dir == native && !native.join(DB_FILE).exists();
+    (unused && legacy != native && legacy.join(DB_FILE).exists()).then(|| legacy.to_path_buf())
+}
 
 /// Where key files live: `$XDG_CONFIG_HOME/genome-cli/keys` when set, else
 /// `~/.config/genome-cli/keys` on Unix (macOS included, so it is never the
@@ -135,6 +156,26 @@ mod tests {
         assert_eq!(pick(native.clone(), legacy.clone(), id), legacy);
         std::fs::create_dir(&native).unwrap();
         assert_eq!(pick(native.clone(), legacy, id), native);
+    }
+
+    /// The macOS bug: the config file lives in the native data dir, so that
+    /// directory exists; the legacy store must still win until a database exists natively.
+    #[test]
+    fn database_file_decides_not_the_directory() {
+        let t = tempfile::tempdir().unwrap();
+        let (native, legacy) = (t.path().join("native"), t.path().join("legacy"));
+        let probe = |d: &Path| d.join(DB_FILE);
+        std::fs::create_dir_all(&native).unwrap();
+        std::fs::write(native.join(CONFIG_FILE), "").unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join(DB_FILE), "").unwrap();
+        assert_eq!(pick(native.clone(), legacy.clone(), probe), legacy);
+        assert_eq!(shadowed(&native, &native, &legacy), Some(legacy.clone()));
+        assert_eq!(shadowed(&legacy, &native, &legacy), None, "using the legacy store is fine");
+        assert_eq!(shadowed(&t.path().join("custom"), &native, &legacy), None, "explicit data dirs are left alone");
+        std::fs::write(native.join(DB_FILE), "").unwrap();
+        assert_eq!(pick(native.clone(), legacy.clone(), probe), native);
+        assert_eq!(shadowed(&native, &native, &legacy), None);
     }
 
     #[test]
