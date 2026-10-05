@@ -91,6 +91,7 @@ pub fn run(ctx: &Ctx) -> Result<()> {
     let (enc_rows, enc_warnings) = crate::commands::db_cmd::status_rows(ctx);
     rows.extend(enc_rows.iter().map(to_record));
     warnings.extend(enc_warnings);
+    rows.extend(unlock_row(ctx));
     rows.push(to_record(&json!({
         "check": "database", "status": "ok", "detail": ctx.db_path, "purpose": "kit metadata (fsqlite)", "hint": null,
     })));
@@ -109,12 +110,38 @@ pub fn run(ctx: &Ctx) -> Result<()> {
         "purpose": if cfg!(windows) { "data_dir restricted to the current user (protected ACL)" } else { "data_dir owner-only (0700, files 0600)" },
         "hint": matches!(access, Access::Open(_)).then(|| permission_hint(&ctx.data_dir)),
     })));
-    rows.push(key_storage_row());
+    rows.push(key_storage_row(ctx));
     ctx.emit(&Report::new("doctor", rows).table_columns(&["check", "status", "detail", "hint"]).warnings(warnings))
 }
 
-/// Which OS credential store is in use, or why none is.
-fn key_storage_row() -> Record {
+/// Which key opens the database here (tries them like any command would).
+fn unlock_row(ctx: &Ctx) -> Option<Record> {
+    let env = crate::db::read_envelope(&ctx.db_path).ok()?;
+    let (status, detail, hint) = match env.unlock_with(&crate::prompt::Tty) {
+        Ok(u) => ("ok", format!("unlocked by key slot {}", u.slot), None),
+        Err(e) => ("locked", e.message, Some("see the [encryption] section of the config file for recovery")),
+    };
+    Some(to_record(&json!({
+        "check": "unlock", "status": status, "detail": detail,
+        "purpose": "can this machine decrypt the data", "hint": hint,
+    })))
+}
+
+/// Does this database need the OS keyring (a legacy keyring slot or a `db unlock` session)?
+fn uses_keyring(ctx: &Ctx) -> bool {
+    crate::db::read_envelope(&ctx.db_path)
+        .is_ok_and(|e| e.has(crate::keys::SlotKind::Keyring) || crate::keyfile::session_marker(&e.db_id).exists())
+}
+
+/// The OS credential store: probed only when this database uses it.
+fn key_storage_row(ctx: &Ctx) -> Record {
+    if !uses_keyring(ctx) {
+        return to_record(&json!({
+            "check": "OS keyring", "status": "unused",
+            "detail": "not used: keys are SSH keys, key files or passphrases",
+            "purpose": "only legacy keyring databases and `db unlock` sessions use it", "hint": null,
+        }));
+    }
     let env_key = std::env::var_os(crate::keys::KEY_ENV).is_some();
     let note = if env_key { "; GENOME_KEY is set and takes precedence for passphrase databases" } else { "" };
     let (status, detail, hint) = match keystore::backend() {

@@ -75,7 +75,7 @@ fn split_container<'a>(bytes: &'a [u8], path: &Path) -> Result<(&'a [u8], Envelo
     let n = u32::from_le_bytes(bytes[8..12].try_into().expect("4")) as usize;
     let prefix = bytes.get(..12 + n).ok_or_else(bad)?;
     let env: Envelope = serde_json::from_slice(&prefix[12..]).map_err(|_| bad())?;
-    Ok((prefix, env, &bytes[12 + n..]))
+    Ok((prefix, env.normalize(), &bytes[12 + n..]))
 }
 
 fn runtime() -> Result<Runtime> {

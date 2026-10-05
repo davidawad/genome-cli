@@ -163,56 +163,103 @@ no cache derived from personal data.
 
 Envelope encryption: each database has a **random 256-bit DEK** (data
 encryption key) that encrypts the database, stores and audit log. The DEK is
-stored only **wrapped** (AEAD-encrypted) by a KEK (key encryption key) in the
-envelope:
+stored only **wrapped**, once per **key slot**, in the envelope. Any one slot
+decrypts the data; adding or removing a slot never re-encrypts anything.
 
 ```json
-{"v":1,"cipher":"xchacha20poly1305","db_id":"…","kek":"passphrase",
- "kdf":{"alg":"argon2id","m":65536,"t":3,"p":1,"salt":"…"},
- "wrapped_dek":"…","created_at":"…"}
+{"v":2,"cipher":"xchacha20poly1305","db_id":"…","created_at":"…","slots":[
+  {"id":"ssh-1a2b3c4d","kind":"ssh","wrapped_dek":"…(age)…",
+   "ssh_public_key":"ssh-ed25519 AAAA… you@laptop",
+   "ssh_fingerprint":"SHA256:…","ssh_identity":"/home/you/.ssh/id_ed25519"},
+  {"id":"file-5e6f7a8b","kind":"file","wrapped_dek":"…"}]}
 ```
 
-KEK sources (the envelope records which one a database uses):
+Slot kinds:
 
-1. **OS keyring** (`kek: keyring`): a random 256-bit KEK in the OS
-   credential store, through one abstraction (`src/platform/keystore.rs`,
-   the `keyring` crate): the macOS Keychain (Security framework,
-   `apple-native`), the Linux Secret Service (GNOME Keyring, KWallet,
-   KeePassXC over the D-Bus session bus) or the Windows Credential Manager
-   (`windows-native`); service `genome-cli`, account `db:<db_id>`. Nothing to
-   type; the OS protects it with your login. Without a D-Bus session
-   (`DBUS_SESSION_BUS_ADDRESS` unset and no `$XDG_RUNTIME_DIR/bus`: SSH
-   sessions, servers, CI, containers) genome-cli treats the store as
-   unavailable without trying to connect, so `auto` falls back to a
-   passphrase (`GENOME_KEY` or the prompt) and `db unlock` sessions are not
-   available. `genome doctor` reports the backend (`key storage`) or the
-   reason there is none.
-2. **Environment** `GENOME_KEY`: a passphrase, for CI and scripts.
-3. **Interactive passphrase** (`kek: passphrase`), prompted without echo:
-   KEK = Argon2id(passphrase, 16-byte random salt), m = 64 MiB, t = 3, p = 1.
+1. **`ssh`** (the default): the DEK is encrypted to your **SSH public key**
+   with [age](https://age-encryption.org) (`ssh-ed25519` and `ssh-rsa`
+   recipients, the `age` crate). Your SSH private key decrypts it. Pure Rust,
+   so the same OpenSSH key works on macOS, Linux and Windows
+   (`%USERPROFILE%\.ssh`).
+2. **`file`**: a random 256-bit KEK in a key file, like an ssh private key:
+   `~/.config/genome-cli/keys/<db_id>.key` (Linux and macOS; under
+   `$XDG_CONFIG_HOME` when set) or `%LOCALAPPDATA%\genome-cli\keys\` on
+   Windows, never inside the data directory. The key directory is 0700 and
+   the file 0600 (a protected, current-user-only ACL on Windows). Like ssh,
+   genome-cli **refuses a key file other users can read** and says how to fix
+   it. `GENOME_KEY_FILE` names a different file; `GENOME_KEY_DIR` moves the
+   directory.
+3. **`passphrase`**: KEK = Argon2id(passphrase, 16-byte random salt),
+   m = 64 MiB, t = 3, p = 1. The passphrase comes from `GENOME_KEY` (CI,
+   scripts) or a prompt without echo.
+4. **`keyring`** (legacy, 0.2): a KEK in the OS credential store (macOS
+   Keychain, Secret Service, Windows Credential Manager). Still read, so a 0.2
+   database opens and can be migrated (below). New keyring slots are made
+   only with an explicit `--kek keyring`. Nothing else touches the OS keyring:
+   no keychain prompts unless you ask for them. `GENOME_NO_KEYRING=1` forbids
+   it outright.
 
-Which source a **new** database uses is set by config `kek` (env
-`GENOME_KEK`, flag `db init|encrypt|rekey --kek`):
+**First run.** The first command that needs a database creates one. With no
+`GENOME_KEY`, genome-cli looks for your SSH key (`GENOME_SSH_KEY`, else
+`id_ed25519` then `id_rsa` in `~/.ssh`, or `GENOME_SSH_DIR`), says which key
+and fingerprint it will use, and asks **"Encrypt with this SSH key? [Y/n]"**.
+Without a terminal it goes ahead and prints the same notice to stderr. If the
+answer is no, or there is no SSH key, it makes a key file slot instead.
 
-- `auto` (default): `GENOME_KEY` if set, else the OS keyring, else a prompt;
-- `keyring`;
-- `passphrase`.
+If your SSH key has a **passphrase**, genome-cli adds a `file` slot as well,
+so everyday commands never ask for the SSH passphrase. The SSH key stays the
+**recovery key**: if the key file is lost, the SSH key (and its passphrase,
+from a prompt or `GENOME_SSH_PASSPHRASE`) still opens the data. The notice
+says so.
 
-To **unlock** a passphrase database, genome-cli tries a session cached by
-`genome db unlock`, then `GENOME_KEY`, then a prompt. With no terminal and no
-key, it fails (exit 10) and names `GENOME_KEY`.
+With `GENOME_KEY` set, a new database gets a passphrase slot instead (you
+chose that key).
+
+**The config file says how to get your data back.** genome-cli keeps an
+`[encryption]` section at the end of its own config file
+(`~/.config/genome-cli/config.toml` on Linux, `~/Library/Application
+Support/genome-cli/config.toml` on macOS, `%APPDATA%\genome-cli\config.toml`
+on Windows; `genome config path`). It lists the data directory, every slot,
+the SSH fingerprints, public keys and private-key paths, the key files, and
+step-by-step recovery instructions. It is rewritten whenever keys change,
+contains no secrets, and is ignored as configuration.
+
+**Unlock order:** key file (if present) -> SSH private key (unencrypted:
+silent; passphrase-protected: `GENOME_SSH_PASSPHRASE` or a prompt) ->
+`GENOME_KEY` -> legacy keyring (or a `db unlock` session) -> passphrase
+prompt. If nothing works it fails (exit 10) and says, for each slot, what
+was missing.
+
+Which key a **new** database (or `rekey`) uses is set by config `kek` (env
+`GENOME_KEK`, flag `db init|encrypt|rekey --kek`): `auto` (default, as
+above), `ssh`, `file`, `passphrase`, `keyring`.
 
 Commands:
 
 | command | |
 |---|---|
-| `genome db init [--encrypt] [--kek …]` | create a database, **encrypted by default** (implicit creation on first `import` is encrypted too) |
+| `genome key status` | every slot, whether it is usable on this machine (SSH private key present, key file present and private) |
+| `genome key add-ssh KEY.pub` | let another SSH key decrypt the data (a `.pub` file or the key line), e.g. a second machine or a backup key |
+| `genome key add-passphrase` | add a passphrase slot (`GENOME_NEW_KEY` or a prompt) |
+| `genome key add-file` | add a key file slot |
+| `genome key remove SLOT` | remove a slot by id (or kind, if there is only one); never the last |
+| `genome db init [--kek …]` | create a database, **encrypted by default** (implicit creation on first `import` is encrypted too) |
 | `genome db encrypt [--kek …]` | migrate a plaintext database in place (see below) |
-| `genome db rekey [--kek …]` | re-wrap the DEK under a new KEK (new passphrase from `GENOME_NEW_KEY` or a prompt), e.g. passphrase -> keyring; deletes the old keyring entry |
-| `genome db unlock` / `genome db lock` | cache / forget the passphrase-derived KEK in the OS keyring (convenience for interactive use); `lock` also shreds stale temp files |
-| `genome db status`, `genome doctor` | encryption state, cipher, KEK type and KDF parameters, sealed vs plaintext store files, audit log state |
+| `genome db rekey --to ssh\|file\|passphrase\|keyring` | replace every slot (`--to` is `--kek`); deletes keyring entries and key files no longer used |
+| `genome db unlock` / `genome db lock` | opt-in: cache / forget a passphrase-derived KEK in the OS keyring; `lock` also shreds stale temp files |
+| `genome db status`, `genome doctor` | encryption state, every slot, sealed vs plaintext store files, audit log; `doctor` also says which slot unlocks the data here |
 | `genome audit log` | verify and show the audit trail |
 | `genome decrypt FILE` | read back `--encrypt-output` / `--seal` files |
+
+**Migrating a 0.2 database off the OS keyring:**
+
+```sh
+genome db rekey --to ssh     # one last keychain prompt; the keychain entry is then deleted
+genome key status            # ssh-…  ok  SHA256:… (/Users/you/.ssh/id_ed25519)
+```
+
+Version-1 envelopes (0.1/0.2, one KEK) are read as a single slot and written
+back as version 2 the next time the database is saved.
 
 `rekey` changes only the wrapping, which is what the envelope is for: it is
 instant and does not rewrite gigabytes of stores. It does not help if the
@@ -251,16 +298,27 @@ real data.
 **Protected (attacker gets the files at rest):** a stolen or lost laptop or
 disk, backups (Time Machine, cloud sync of the data directory), another local
 user reading your files (the data directory is also owner-only: 0700 with
-0600 files on Unix, a protected current-user-only ACL on Windows), files copied off the machine. They get ciphertext;
-the passphrase is protected by Argon2id, and a keyring KEK by the OS.
+0600 files on Unix, a protected current-user-only ACL on Windows), files copied off the machine. They get ciphertext:
+the data directory never contains a key. Copying or syncing it alone gives
+nothing; an attacker also needs your SSH private key (itself
+passphrase-protected, if you protect it), the key file, or the passphrase
+(Argon2id makes guessing slow).
+
+**Key files and unencrypted SSH keys are like ssh keys**: they protect the
+data against everything above, but **not against someone who can already
+read your files as you** (they can read the key too). That is the same
+trade-off ssh makes, and it is what lets genome-cli work without prompts. If
+you need protection against that, use a passphrase-protected SSH key and
+remove the key file slot (`genome key remove file`; you will be asked for the
+SSH passphrase each run), or a passphrase slot.
 Integrity: any modification, truncation, reordering or swap of encrypted
 data is detected (except audit-log tail truncation, above).
 
 **Not protected:**
 
 - **A compromised or malicious process running as you while the data is
-  unlocked** (malware, a debugger). It can read memory, the keyring, or
-  `GENOME_KEY`.
+  unlocked** (malware, a debugger). It can read memory, your SSH key and key
+  files, or `GENOME_KEY`.
 - **Memory.** Plaintext lives in process memory while a command runs. Keys
   and many plaintext buffers are zeroized on drop, but not every copy
   (parsed records, fsqlite's in-memory pages, output strings).
@@ -279,11 +337,12 @@ data is detected (except audit-log tail truncation, above).
   (directories) and the envelope (KDF parameters, KEK type) are visible.
 - **`GENOME_KEY` in the environment** is visible to processes of the same
   user (e.g. `ps eww` on some systems) and may end up in shell history. Use
-  it for CI, and the keyring or a prompt interactively.
+  it for CI, and an SSH key, key file or prompt interactively.
 
-**Access control** comes from the OS (file permissions, your login session
-and keyring) plus the key: without the KEK, no genome-cli command can read
-anything. The **audit trail** records who (`$USER`) ran which command on
+**Access control** comes from the OS (file permissions, your login session)
+plus the keys: without one of the key slots, no genome-cli command can read
+anything. **Lose every key and the data is unrecoverable**: back up your SSH
+key (or add a second one with `genome key add-ssh`). The **audit trail** records who (`$USER`) ran which command on
 which kits and when (`$USER`, or `%USERNAME%` on Windows).
 
 ## 5. Performance

@@ -11,8 +11,9 @@ use crate::crypto::{self, Key, SealedReader};
 use crate::db::{self, Db, DbFile};
 use crate::error::{AppError, ErrorKind, Result};
 use crate::gtstore;
-use crate::keys::{Envelope, KekKind};
+use crate::keys::Envelope;
 use crate::output::{to_record, Report};
+use crate::prompt::Tty;
 use crate::store;
 
 pub fn run(ctx: &Ctx, cmd: DbCmd) -> Result<()> {
@@ -51,12 +52,13 @@ fn init(ctx: &Ctx, kek: Option<&str>) -> Result<()> {
         drop(ctx.db()?);
         ctx.info(&format!("created UNENCRYPTED database {}", ctx.db_path.display()));
     } else {
-        let (envelope, dek) = Envelope::create(pref(ctx, kek))?;
+        let (envelope, dek) = Envelope::create(pref(ctx, kek), &Tty)?;
         drop(Db::open_sealed(&ctx.db_path, envelope.clone(), dek)?);
+        crate::setup::announce(ctx, &envelope);
         ctx.info(&format!(
-            "created encrypted database {} (XChaCha20-Poly1305, key: {})",
+            "created encrypted database {} (XChaCha20-Poly1305, keys: {})",
             ctx.db_path.display(),
-            envelope.kek.as_str()
+            envelope.kinds()
         ));
     }
     ctx.audit("db init", json!({"encrypted": !ctx.insecure_plaintext()}))?;
@@ -134,7 +136,9 @@ fn encrypt(ctx: &Ctx, kek: Option<&str>) -> Result<()> {
                 (env, dek)
             } else {
                 let _ = std::fs::remove_file(&staged);
-                Envelope::create(pref(ctx, kek))?
+                let (env, dek) = Envelope::create(pref(ctx, kek), &Tty)?;
+                crate::setup::announce(ctx, &env);
+                (env, dek)
             };
             let plain = Db::open(path)?;
             let dump = plain.dump()?;
@@ -185,19 +189,14 @@ fn rekey(ctx: &Ctx, kek: Option<&str>) -> Result<()> {
     let mut d = ctx.db()?;
     let old = d.envelope().cloned().expect("sealed");
     let dek = d.dek().cloned().expect("sealed");
-    let new = old.rekey(&dek, pref(ctx, kek))?;
+    let new = old.rekey(&dek, pref(ctx, kek), &Tty)?;
     d.set_envelope(new.clone())?;
     drop(d);
-    if let (KekKind::Keyring, Some(acct)) = (old.kek, old.keyring_account.as_deref()) {
-        if new.keyring_account.as_deref() != Some(acct) {
-            let _ = crate::platform::keystore::delete(acct);
-        }
-    }
-    if old.kek == KekKind::Passphrase {
-        let _ = old.clear_session();
-    }
-    ctx.info(&format!("database key re-wrapped ({} -> {})", old.kek.as_str(), new.kek.as_str()));
-    ctx.audit("db rekey", json!({"from": old.kek.as_str(), "to": new.kek.as_str()}))?;
+    new.commit_keys()?;
+    new.retire_unused(&old);
+    crate::setup::record(ctx, &new);
+    ctx.info(&format!("database key re-wrapped ({} -> {})", old.kinds(), new.kinds()));
+    ctx.audit("db rekey", json!({"from": old.kinds(), "to": new.kinds()}))?;
     status(ctx)
 }
 
@@ -275,11 +274,9 @@ pub fn status_rows(ctx: &Ctx) -> (Vec<Value>, Vec<String>) {
     if state == DbFile::Sealed {
         match db::read_envelope(&ctx.db_path) {
             Ok(e) => {
-                let kdf =
-                    e.kdf.as_ref().map(|k| format!("argon2id m={}KiB t={} p={}", k.params.m, k.params.t, k.params.p));
-                rows.push(json!({"check": "key", "status": e.kek.as_str(),
-                    "detail": format!("{} DEK wrapped by {} KEK{}", e.cipher, e.kek.as_str(), kdf.map(|k| format!(" ({k})")).unwrap_or_default()),
-                    "purpose": "envelope encryption (random per-database DEK)", "hint": null}));
+                let (slot_rows, slot_warnings) = crate::commands::key_cmd::slot_rows(&e);
+                rows.extend(slot_rows);
+                warnings.extend(slot_warnings);
             }
             Err(err) => warnings.push(err.message),
         }

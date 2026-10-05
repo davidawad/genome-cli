@@ -17,9 +17,9 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     AclSizeInformation, EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorControl, GetTokenInformation,
-    IsWellKnownSid, TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACL,
-    ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
-    SE_DACL_PROTECTED, SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_QUERY, TOKEN_USER,
+    IsWellKnownSid, TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACE_FLAGS, ACL,
+    ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -67,11 +67,20 @@ impl UserSid {
 }
 
 pub fn protect(dir: &Path) -> std::io::Result<()> {
+    protect_with(dir, SUB_CONTAINERS_AND_OBJECTS_INHERIT)
+}
+
+/// Owner-only DACL on a single file (no inheritable entries).
+pub fn protect_file(path: &Path) -> std::io::Result<()> {
+    protect_with(path, NO_INHERITANCE)
+}
+
+fn protect_with(dir: &Path, inheritance: ACE_FLAGS) -> std::io::Result<()> {
     let user = UserSid::current()?;
     let ea = EXPLICIT_ACCESS_W {
         grfAccessPermissions: GENERIC_ALL,
         grfAccessMode: SET_ACCESS,
-        grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        grfInheritance: inheritance,
         Trustee: TRUSTEE_W {
             pMultipleTrustee: null_mut(),
             MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
@@ -100,6 +109,69 @@ pub fn protect(dir: &Path) -> std::io::Result<()> {
         LocalFree(acl.cast());
         if rc != ERROR_SUCCESS {
             return Err(win_err(rc, &format!("restricting {} to the current user", dir.display())));
+        }
+    }
+    Ok(())
+}
+
+/// Test helper: also let Everyone read `path` (what `check` must flag).
+#[cfg(test)]
+pub fn grant_everyone_read(path: &Path) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::GENERIC_READ;
+    use windows_sys::Win32::Security::Authorization::{GRANT_ACCESS, TRUSTEE_IS_WELL_KNOWN_GROUP};
+    use windows_sys::Win32::Security::{CreateWellKnownSid, WinWorldSid, SECURITY_MAX_SID_SIZE};
+    let mut sid = vec![0u64; (SECURITY_MAX_SID_SIZE as usize).div_ceil(8)];
+    let mut len = SECURITY_MAX_SID_SIZE;
+    let wpath = wide(path);
+    // SAFETY: valid out-pointers; `sd` (owning `old`) and `acl` are freed with LocalFree.
+    unsafe {
+        if CreateWellKnownSid(WinWorldSid, null_mut(), sid.as_mut_ptr().cast(), &mut len) == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let (mut old, mut sd): (*mut ACL, PSECURITY_DESCRIPTOR) = (null_mut(), null_mut());
+        let rc = GetNamedSecurityInfoW(
+            wpath.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            &mut old,
+            null_mut(),
+            &mut sd,
+        );
+        if rc != ERROR_SUCCESS {
+            return Err(win_err(rc, "reading the ACL"));
+        }
+        let ea = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: GENERIC_READ,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: NO_INHERITANCE,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: null_mut(),
+                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
+                ptstrName: sid.as_mut_ptr().cast(),
+            },
+        };
+        let mut acl: *mut ACL = null_mut();
+        let rc = SetEntriesInAclW(1, &ea, old, &mut acl);
+        LocalFree(sd.cast());
+        if rc != ERROR_SUCCESS {
+            return Err(win_err(rc, "building the ACL"));
+        }
+        let rc = SetNamedSecurityInfoW(
+            wpath.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            acl,
+            null(),
+        );
+        LocalFree(acl.cast());
+        if rc != ERROR_SUCCESS {
+            return Err(win_err(rc, "granting Everyone read access"));
         }
     }
     Ok(())

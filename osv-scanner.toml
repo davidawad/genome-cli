@@ -1,0 +1,11 @@
+# Acknowledged advisories (osv-scanner reads this file).
+
+# Marvin attack on the `rsa` crate: a timing side channel in RSA decryption
+# that an attacker exploits by timing many decryptions (typically a network
+# service). `rsa` comes in through age's `ssh` feature to support ssh-rsa
+# keys; genome-cli decrypts only locally, once per command, with the user's
+# own key, so nobody can collect such timings. No fixed release exists.
+# ssh-ed25519 keys (the default first choice) do not use `rsa` at all.
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+reason = "local, single-shot RSA decryption with the user's own key; no remote timing oracle; no upstream fix"
