@@ -15,7 +15,7 @@ fn list(items: &[String]) -> String {
     format!("[{}]", items.iter().map(|s| q(s)).collect::<Vec<_>>().join(", "))
 }
 
-fn of_kind<'a>(env: &'a Envelope, kind: SlotKind) -> impl Iterator<Item = &'a Slot> {
+fn of_kind(env: &Envelope, kind: SlotKind) -> impl Iterator<Item = &Slot> {
     env.slots.iter().filter(move |s| s.kind == kind)
 }
 
