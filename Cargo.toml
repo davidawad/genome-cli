@@ -37,7 +37,6 @@ argon2 = { version = "0.5", features = ["zeroize"] }
 zeroize = { version = "1", features = ["derive"] }
 getrandom = "0.2"
 rpassword = "7"
-keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
 directories = "6"
 which = "8"
 age = { version = "0.12.1", features = ["ssh"] }

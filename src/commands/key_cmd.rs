@@ -123,11 +123,9 @@ fn passphrase_row(s: &Slot) -> (Value, Option<String>) {
 }
 
 fn keyring_row(s: &Slot) -> (Value, Option<String>) {
-    let acct = s.keyring_account.clone().unwrap_or_default();
-    let row = json!({"check": format!("key {}", s.id), "status": "legacy",
-        "detail": format!("OS keyring entry {}/{acct}", crate::platform::keystore::SERVICE),
-        "purpose": "legacy OS keyring key", "hint": "genome db rekey --to ssh"});
-    (row, Some("the key is in the OS keyring (legacy): move it with `genome db rekey --to ssh`".into()))
+    let row = json!({"check": format!("key {}", s.id), "status": "unsupported",
+        "detail": "OS keychain key from genome-cli 0.2 or earlier", "purpose": "no longer supported", "hint": null});
+    (row, Some(keys::KEYCHAIN_UNSUPPORTED.into()))
 }
 
 /// One row per key slot, plus warnings (used by `key status`, `db status`, `doctor`).

@@ -12,7 +12,6 @@ use crate::output::{to_record, Record, Report};
 use crate::pipeline::cached_reference_path;
 use crate::platform::dirs::Dir;
 use crate::platform::exe::{install_hint, which};
-use crate::platform::keystore;
 use crate::platform::perms::{check_private, Access};
 
 /// (tool, version args, needed for)
@@ -110,7 +109,6 @@ pub fn run(ctx: &Ctx) -> Result<()> {
         "purpose": if cfg!(windows) { "data_dir restricted to the current user (protected ACL)" } else { "data_dir owner-only (0700, files 0600)" },
         "hint": matches!(access, Access::Open(_)).then(|| permission_hint(&ctx.data_dir)),
     })));
-    rows.push(key_storage_row(ctx));
     ctx.emit(&Report::new("doctor", rows).table_columns(&["check", "status", "detail", "hint"]).warnings(warnings))
 }
 
@@ -125,37 +123,6 @@ fn unlock_row(ctx: &Ctx) -> Option<Record> {
         "check": "unlock", "status": status, "detail": detail,
         "purpose": "can this machine decrypt the data", "hint": hint,
     })))
-}
-
-/// Does this database need the OS keyring (a legacy keyring slot or a `db unlock` session)?
-fn uses_keyring(ctx: &Ctx) -> bool {
-    crate::db::read_envelope(&ctx.db_path)
-        .is_ok_and(|e| e.has(crate::keys::SlotKind::Keyring) || crate::keyfile::session_marker(&e.db_id).exists())
-}
-
-/// The OS credential store: probed only when this database uses it.
-fn key_storage_row(ctx: &Ctx) -> Record {
-    if !uses_keyring(ctx) {
-        return to_record(&json!({
-            "check": "OS keyring", "status": "unused",
-            "detail": "not used: keys are SSH keys, key files or passphrases",
-            "purpose": "only legacy keyring databases and `db unlock` sessions use it", "hint": null,
-        }));
-    }
-    let env_key = std::env::var_os(crate::keys::KEY_ENV).is_some();
-    let note = if env_key { "; GENOME_KEY is set and takes precedence for passphrase databases" } else { "" };
-    let (status, detail, hint) = match keystore::backend() {
-        Ok(b) => ("ok", format!("{}{note}", b.name()), None),
-        Err(why) => (
-            "unavailable",
-            format!("{why}{note}"),
-            Some("passphrase databases still work: GENOME_KEY or the interactive prompt (`genome config set kek passphrase`)"),
-        ),
-    };
-    to_record(&json!({
-        "check": "key storage", "status": status, "detail": detail,
-        "purpose": "OS credential store for keyring keys and `db unlock` sessions", "hint": hint,
-    }))
 }
 
 /// Set when the data dir is the pre-0.2 XDG-style macOS location.

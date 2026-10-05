@@ -192,12 +192,13 @@ Slot kinds:
 3. **`passphrase`**: KEK = Argon2id(passphrase, 16-byte random salt),
    m = 64 MiB, t = 3, p = 1. The passphrase comes from `GENOME_KEY` (CI,
    scripts) or a prompt without echo.
-4. **`keyring`** (legacy, 0.2): a KEK in the OS credential store (macOS
-   Keychain, Secret Service, Windows Credential Manager). Still read, so a 0.2
-   database opens and can be migrated (below). New keyring slots are made
-   only with an explicit `--kek keyring`. Nothing else touches the OS keyring:
-   no keychain prompts unless you ask for them. `GENOME_NO_KEYRING=1` forbids
-   it outright.
+genome-cli **never uses an OS keychain or credential store** (macOS
+Keychain, Secret Service, Windows Credential Manager): keys are files you
+control and can carry to any machine, and nothing ever pops up a keychain
+prompt. Databases made by 0.2 and earlier kept their key in the OS keychain;
+they are recognised and refused with an explanation (to keep such data:
+with genome-cli 0.2 run `genome db rekey --kek passphrase`, then open it here
+with `GENOME_KEY` and run `genome db rekey --to ssh`).
 
 **First run.** The first command that needs a database creates one. With no
 `GENOME_KEY`, genome-cli looks for your SSH key (`GENOME_SSH_KEY`, else
@@ -226,13 +227,12 @@ contains no secrets, and is ignored as configuration.
 
 **Unlock order:** key file (if present) -> SSH private key (unencrypted:
 silent; passphrase-protected: `GENOME_SSH_PASSPHRASE` or a prompt) ->
-`GENOME_KEY` -> legacy keyring (or a `db unlock` session) -> passphrase
-prompt. If nothing works it fails (exit 10) and says, for each slot, what
+`GENOME_KEY` -> passphrase prompt. If nothing works it fails (exit 10) and says, for each slot, what
 was missing.
 
 Which key a **new** database (or `rekey`) uses is set by config `kek` (env
 `GENOME_KEK`, flag `db init|encrypt|rekey --kek`): `auto` (default, as
-above), `ssh`, `file`, `passphrase`, `keyring`.
+above), `ssh`, `file`, `passphrase`.
 
 Commands:
 
@@ -245,21 +245,24 @@ Commands:
 | `genome key remove SLOT` | remove a slot by id (or kind, if there is only one); never the last |
 | `genome db init [--kek …]` | create a database, **encrypted by default** (implicit creation on first `import` is encrypted too) |
 | `genome db encrypt [--kek …]` | migrate a plaintext database in place (see below) |
-| `genome db rekey --to ssh\|file\|passphrase\|keyring` | replace every slot (`--to` is `--kek`); deletes keyring entries and key files no longer used |
-| `genome db unlock` / `genome db lock` | opt-in: cache / forget a passphrase-derived KEK in the OS keyring; `lock` also shreds stale temp files |
+| `genome db rekey --to ssh\|file\|passphrase` | replace every slot (`--to` is `--kek`); deletes key files no longer used |
+| `genome db lock` | shred stale temporary files |
 | `genome db status`, `genome doctor` | encryption state, every slot, sealed vs plaintext store files, audit log; `doctor` also says which slot unlocks the data here |
 | `genome audit log` | verify and show the audit trail |
 | `genome decrypt FILE` | read back `--encrypt-output` / `--seal` files |
 
-**Migrating a 0.2 database off the OS keyring:**
-
-```sh
-genome db rekey --to ssh     # one last keychain prompt; the keychain entry is then deleted
-genome key status            # ssh-…  ok  SHA256:… (/Users/you/.ssh/id_ed25519)
-```
-
 Version-1 envelopes (0.1/0.2, one KEK) are read as a single slot and written
 back as version 2 the next time the database is saved.
+
+The config file is written owner-only (0600; a current-user ACL on Windows).
+
+**Where the data is (macOS).** Releases up to 0.1 kept data in
+`~/.local/share/genome-cli`; the native macOS location is
+`~/Library/Application Support/genome-cli`, which is also the config
+directory. genome-cli uses the old location while it holds `genome.db` and
+the native one holds none (the config file being there does not count), and
+it never creates a new, empty database in the native location while an old
+store exists: it stops and says where your data is.
 
 `rekey` changes only the wrapping, which is what the envelope is for: it is
 instant and does not rewrite gigabytes of stores. It does not help if the
@@ -348,7 +351,7 @@ which kits and when (`$USER`, or `%USERNAME%` on Windows).
 ## 5. Performance
 
 Measured on real data on an Apple Silicon Mac (release build, stable Rust,
-encryption on, key in the macOS Keychain), 2026-10-04:
+encryption on), 2026-10-04:
 
 | operation | input | wall time | peak memory |
 |---|---|---:|---:|
@@ -374,7 +377,7 @@ property of an organization's policies, risk analysis, training and
 contracts. What this tool provides are the **technical safeguards** the
 Security Rule describes (45 CFR 164.312): encryption at rest (addressable
 specification 164.312(a)(2)(iv)), access control via keys bound to the OS
-user/keyring (164.312(a)(1)), audit controls (164.312(b)) and integrity
+user and key (164.312(a)(1)), audit controls (164.312(b)) and integrity
 controls through authenticated encryption (164.312(c)(1)). An organization
 that adopts genome-cli still has to do its own risk analysis and cover the
 items listed under *Not protected*.

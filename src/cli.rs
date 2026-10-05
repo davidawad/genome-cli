@@ -317,24 +317,22 @@ pub enum DbCmd {
         /// Encrypt the new database (the default; accepted for explicitness)
         #[arg(long)]
         encrypt: bool,
-        /// Key: auto (GENOME_KEY if set, else your SSH key after asking, else a key file), ssh, file, passphrase, keyring
-        #[arg(long, value_parser = ["auto", "ssh", "file", "passphrase", "keyring"])]
+        /// Key: auto (GENOME_KEY if set, else your SSH key after asking, else a key file), ssh, file, passphrase
+        #[arg(long, value_parser = ["auto", "ssh", "file", "passphrase"])]
         kek: Option<String>,
     },
     /// Encrypt an existing plaintext database and its genotype stores in place
     Encrypt {
         /// Key for the new database key (see `db init`)
-        #[arg(long, value_parser = ["auto", "ssh", "file", "passphrase", "keyring"])]
+        #[arg(long, value_parser = ["auto", "ssh", "file", "passphrase"])]
         kek: Option<String>,
     },
-    /// Replace every key slot, e.g. `--to ssh` to move a 0.2 database off the OS keyring
+    /// Replace every key slot, e.g. `--to ssh`
     Rekey {
-        /// New key: ssh, file, passphrase (from GENOME_NEW_KEY or a prompt), keyring, auto
-        #[arg(long, visible_alias = "to", value_parser = ["auto", "ssh", "file", "passphrase", "keyring"])]
+        /// New key: ssh, file, passphrase (from GENOME_NEW_KEY or a prompt), auto
+        #[arg(long, visible_alias = "to", value_parser = ["auto", "ssh", "file", "passphrase"])]
         kek: Option<String>,
     },
-    /// Cache a passphrase database's key in the OS keyring until `db lock` (opt-in)
-    Unlock,
     /// Forget a cached key (`db unlock`) and remove stale temporary files
     Lock,
     /// Encryption status: cipher, key source, sealed stores, audit log
@@ -372,7 +370,7 @@ pub enum KeyCmd {
     AddFile,
     /// Remove a key slot by id (or kind, when there is one of it); never the last
     Remove {
-        /// Slot id from `genome key status`, or ssh|file|passphrase|keyring
+        /// Slot id from `genome key status`, or ssh|file|passphrase
         slot: String,
     },
 }

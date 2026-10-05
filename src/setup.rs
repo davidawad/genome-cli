@@ -30,10 +30,6 @@ pub fn recovery_steps(env: &Envelope, data_dir: &Path) -> Vec<String> {
         .collect();
     keys.extend(of_kind(env, SlotKind::File).map(|s| format!("the key file {}", env.key_file_path(s).display())));
     keys.extend(of_kind(env, SlotKind::Passphrase).map(|_| "your database passphrase (GENOME_KEY)".to_string()));
-    keys.extend(
-        of_kind(env, SlotKind::Keyring)
-            .map(|_| "this machine's OS keyring (legacy; migrate: genome db rekey --to ssh)".to_string()),
-    );
     let mut place = Vec::new();
     if env.has(SlotKind::Ssh) {
         place.push("put the SSH key in ~/.ssh (or point GENOME_SSH_KEY at it)");
@@ -81,11 +77,7 @@ pub fn encryption_block(env: &Envelope, data_dir: &Path, db_path: &Path) -> Stri
         list(&ids)
     ));
     out.push_str(&format!("ssh_public_keys = {}\nkey_files = {}\n", list(&pubs), list(&files)));
-    out.push_str(&format!(
-        "passphrase = {}\nlegacy_keyring = {}\n",
-        env.has(SlotKind::Passphrase),
-        env.has(SlotKind::Keyring)
-    ));
+    out.push_str(&format!("passphrase = {}\n", env.has(SlotKind::Passphrase)));
     out
 }
 

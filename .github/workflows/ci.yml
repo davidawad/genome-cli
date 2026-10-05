@@ -8,9 +8,7 @@
 #
 # Tests needing external tools skip with a "SKIPPED ..." line on stderr:
 # the FASTQ pipeline e2e (minimap2/samtools/bcftools), the README sample check
-# (bash + python3; Unix only) and the OS keyring round trip (opted in below via
-# GENOME_TEST_KEYRING; skipped where no credential store is reachable, e.g.
-# Linux runners without a D-Bus session).
+# (bash + python3; Unix only).
 name: CI
 
 on:
@@ -24,7 +22,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  GENOME_TEST_KEYRING: "1"
 
 jobs:
   test:
