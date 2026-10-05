@@ -86,6 +86,25 @@ impl Dir {
 
 pub const CONFIG_FILE: &str = "config.toml";
 
+/// Where key files live: `$XDG_CONFIG_HOME/genome-cli/keys` when set, else
+/// `~/.config/genome-cli/keys` on Unix (macOS included, so it is never the
+/// data directory) and `%LOCALAPPDATA%\genome-cli\keys` on Windows (beside
+/// `data`, not inside it). `GENOME_KEY_DIR` overrides it.
+pub fn key_dir() -> PathBuf {
+    if let Some(d) = std::env::var_os("GENOME_KEY_DIR").filter(|v| !v.is_empty()) {
+        return PathBuf::from(d);
+    }
+    if let Some(p) = Dir::Config.xdg_override() {
+        return p.join("keys");
+    }
+    if cfg!(windows) {
+        if let Some(b) = BaseDirs::new() {
+            return b.data_local_dir().join(APP).join("keys");
+        }
+    }
+    home().join(".config").join(APP).join("keys")
+}
+
 /// Prefer `native` unless only `legacy` exists (as judged by `probe`).
 fn pick(native: PathBuf, legacy: PathBuf, probe: impl Fn(&Path) -> PathBuf) -> PathBuf {
     if !probe(&native).exists() && probe(&legacy).exists() {
@@ -124,5 +143,12 @@ mod tests {
             assert!(d.native().components().any(|c| c.as_os_str() == APP), "{:?}", d.native());
         }
         assert_eq!(Dir::Data.legacy().is_some(), cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn key_dir_is_outside_the_data_dir() {
+        if std::env::var_os("GENOME_KEY_DIR").is_none() && std::env::var_os("XDG_CONFIG_HOME").is_none() {
+            assert!(!key_dir().starts_with(Dir::Data.native()), "{:?}", key_dir());
+        }
     }
 }

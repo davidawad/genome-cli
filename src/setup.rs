@@ -30,11 +30,24 @@ pub fn recovery_steps(env: &Envelope, data_dir: &Path) -> Vec<String> {
         .collect();
     keys.extend(of_kind(env, SlotKind::File).map(|s| format!("the key file {}", env.key_file_path(s).display())));
     keys.extend(of_kind(env, SlotKind::Passphrase).map(|_| "your database passphrase (GENOME_KEY)".to_string()));
-    keys.extend(of_kind(env, SlotKind::Keyring).map(|_| "this machine's OS keyring (legacy; migrate: genome db rekey --to ssh)".to_string()));
+    keys.extend(
+        of_kind(env, SlotKind::Keyring)
+            .map(|_| "this machine's OS keyring (legacy; migrate: genome db rekey --to ssh)".to_string()),
+    );
+    let mut place = Vec::new();
+    if env.has(SlotKind::Ssh) {
+        place.push("put the SSH key in ~/.ssh (or point GENOME_SSH_KEY at it)");
+    }
+    if env.has(SlotKind::File) {
+        place.push("put the key file at the same path (or point GENOME_KEY_FILE at it)");
+    }
+    if env.has(SlotKind::Passphrase) {
+        place.push("set GENOME_KEY or type the passphrase when asked");
+    }
     vec![
         format!("copy the data directory {}", data_dir.display()),
         format!("bring ANY ONE of: {}", keys.join("; or ")),
-        "put the SSH key in ~/.ssh (or set GENOME_SSH_KEY) and the key file in the same place (or set GENOME_KEY_FILE)".into(),
+        place.join("; "),
         "run `genome doctor`: it reports which key unlocked the data".into(),
     ]
 }
@@ -55,8 +68,18 @@ pub fn encryption_block(env: &Envelope, data_dir: &Path, db_path: &Path) -> Stri
     }
     out.push_str("# If every key below is lost, the data cannot be recovered: back one of them up.\n");
     out.push_str("[encryption]\n");
-    out.push_str(&format!("data_dir = {}\ndatabase = {}\ndb_id = {}\n", q(&data_dir.display().to_string()), q(&db_path.display().to_string()), q(&env.db_id)));
-    out.push_str(&format!("slots = {}\nssh_fingerprints = {}\nssh_identities = {}\n", list(&slots), list(&fps), list(&ids)));
+    out.push_str(&format!(
+        "data_dir = {}\ndatabase = {}\ndb_id = {}\n",
+        q(&data_dir.display().to_string()),
+        q(&db_path.display().to_string()),
+        q(&env.db_id)
+    ));
+    out.push_str(&format!(
+        "slots = {}\nssh_fingerprints = {}\nssh_identities = {}\n",
+        list(&slots),
+        list(&fps),
+        list(&ids)
+    ));
     out.push_str(&format!("ssh_public_keys = {}\nkey_files = {}\n", list(&pubs), list(&files)));
     out.push_str(&format!(
         "passphrase = {}\nlegacy_keyring = {}\n",
@@ -79,11 +102,7 @@ pub fn record(ctx: &Ctx, env: &Envelope) {
 pub fn notice(env: &Envelope, db_path: &Path, config_path: &Path) -> Vec<String> {
     let mut lines = vec![format!("genome: created an encrypted database at {}", db_path.display())];
     for s in of_kind(env, SlotKind::Ssh) {
-        lines.push(format!(
-            "  key: SSH key {} ({})",
-            ssh_identity(s),
-            s.ssh_fingerprint.as_deref().unwrap_or("?")
-        ));
+        lines.push(format!("  key: SSH key {} ({})", ssh_identity(s), s.ssh_fingerprint.as_deref().unwrap_or("?")));
     }
     for s in of_kind(env, SlotKind::File) {
         let why = if env.has(SlotKind::Ssh) {

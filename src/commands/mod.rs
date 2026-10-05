@@ -6,6 +6,7 @@ pub mod db_cmd;
 pub mod doctor;
 pub mod export;
 pub mod import;
+pub mod key_cmd;
 pub mod kits;
 pub mod liftover_cmd;
 pub mod lookup;
@@ -37,6 +38,7 @@ pub fn dispatch(ctx: &Ctx, cmd: Command, export_vcf: bool) -> Result<Status> {
         Command::Pipeline(c) => crate::pipeline::run_cmd(ctx, c),
         Command::Doctor => doctor::run(ctx).map(|()| 0),
         Command::Db(c) => db_cmd::run(ctx, c).map(|()| 0),
+        Command::Key(c) => key_cmd::run(ctx, c).map(|()| 0),
         Command::Audit(c) => db_cmd::audit(ctx, c).map(|()| 0),
         Command::Decrypt(a) => db_cmd::decrypt(ctx, a).map(|()| 0),
         Command::Config(c) => config_cmd::run(ctx, c).map(|()| 0),

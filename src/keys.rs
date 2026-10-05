@@ -524,10 +524,9 @@ impl Envelope {
 
     /// Cache the passphrase-derived KEK in the OS keyring (`db unlock`, opt-in).
     pub fn cache_session(&self) -> Result<()> {
-        let s = self
-            .slots_of(SlotKind::Passphrase)
-            .next()
-            .ok_or_else(|| AppError::usage(format!("this database has no passphrase to cache (keys: {})", self.kinds())))?;
+        let s = self.slots_of(SlotKind::Passphrase).next().ok_or_else(|| {
+            AppError::usage(format!("this database has no passphrase to cache (keys: {})", self.kinds()))
+        })?;
         let pass = passphrase(KEY_ENV, "Database passphrase: ", false)?;
         let kek = Self::passphrase_kek(s, &pass)?;
         self.unwrap_with(s, &kek)?;

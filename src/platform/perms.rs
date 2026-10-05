@@ -30,6 +30,48 @@ fn restrict_dir(_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Make an existing file owner-only: 0600 on Unix; on Windows a protected,
+/// non-inheritable DACL for the current user (for files that may live outside
+/// a protected directory, such as key files).
+pub fn restrict_file(path: &Path) -> std::io::Result<()> {
+    restrict_file_imp(path)
+}
+
+#[cfg(unix)]
+fn restrict_file_imp(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(windows)]
+fn restrict_file_imp(path: &Path) -> std::io::Result<()> {
+    super::win_acl::protect_file(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn restrict_file_imp(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Test helper: make `path` readable by other users (0644 / an Everyone ACE).
+#[cfg(test)]
+pub fn share_for_test(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))
+    }
+    #[cfg(windows)]
+    {
+        super::win_acl::grant_everyone_read(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 /// Options for creating a file readable only by its owner (0600 on Unix;
 /// Windows files inherit the directory's DACL).
 pub fn private_options() -> OpenOptions {

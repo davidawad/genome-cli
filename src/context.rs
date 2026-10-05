@@ -137,9 +137,9 @@ impl Ctx {
         match crate::db::inspect(&self.db_path) {
             DbFile::Missing if self.insecure_plaintext() => self.open_plain(),
             DbFile::Missing => {
-                let (envelope, dek) = Envelope::create(self.get("kek"))?;
+                let (envelope, dek) = Envelope::create(self.get("kek"), &crate::prompt::Tty)?;
                 let db = Db::open_sealed(&self.db_path, envelope.clone(), dek.clone())?;
-                self.verbose(&format!("created encrypted database ({} key)", envelope.kek.as_str()));
+                crate::setup::announce(self, &envelope);
                 self.set_security(Security::Sealed { envelope: Box::new(envelope), dek });
                 Ok(db)
             }

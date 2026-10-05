@@ -184,8 +184,9 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         key: "kek",
         env: &["GENOME_KEK"],
-        help: "key source for new encrypted databases (auto: GENOME_KEY if set, else OS keyring, else a prompt)",
-        choices: &["auto", "keyring", "passphrase"],
+        help:
+            "key for new encrypted databases (auto: GENOME_KEY if set, else your SSH key after asking, else a key file)",
+        choices: &["auto", "ssh", "file", "passphrase", "keyring"],
         kind: Kind::Str,
     },
     Setting {
@@ -362,12 +363,51 @@ fn toml_scalar(v: &toml::Value) -> Option<String> {
     }
 }
 
+/// First line of the `[encryption]` section genome-cli maintains at the end
+/// of the config file (see [`crate::setup`]); everything from it on is rewritten.
+pub const MANAGED_MARK: &str = "# ---- genome-cli: encryption (managed; rewritten when keys change) ----";
+
+/// The user's part of a config file and the managed block, if any.
+fn split_managed(text: &str) -> (&str, &str) {
+    match text.find(MANAGED_MARK) {
+        Some(i) => (&text[..i], &text[i..]),
+        None => (text, ""),
+    }
+}
+
+fn join_managed(head: &str, block: &str) -> String {
+    let head = head.trim_end();
+    match (head.is_empty(), block.is_empty()) {
+        (_, true) => format!("{head}\n"),
+        (true, false) => block.to_string(),
+        (false, false) => format!("{head}\n\n{block}"),
+    }
+}
+
+fn write_config(path: &Path, text: &str) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, text).map_err(|e| AppError::io(format!("writing {}: {e}", path.display())))
+}
+
+/// Replace (or add) the managed `[encryption]` section, keeping the rest.
+pub fn write_managed_block(path: &Path, block: &str) -> Result<()> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let (head, old) = split_managed(&text);
+    if old == block {
+        return Ok(());
+    }
+    write_config(path, &join_managed(head, block))
+}
+
 /// Accepts flat keys and one level of tables (`[csv] delimiter = ";"` ==
-/// `csv_delimiter = ";"`).
+/// `csv_delimiter = ";"`). The `[encryption]` section is informational.
 pub fn parse_toml_layer(text: &str) -> Result<Layer> {
     let table: toml::Table = text.parse().map_err(|e| AppError::config(format!("TOML: {e}")))?;
     table
         .iter()
+        .filter(|(k, _)| k.as_str() != "encryption")
         .flat_map(|(k, v)| match v {
             toml::Value::Table(t) => t.iter().map(|(k2, v2)| (format!("{k}_{k2}"), v2.clone())).collect::<Vec<_>>(),
             other => vec![(k.clone(), other.clone())],
@@ -407,7 +447,8 @@ pub fn resolve(config_flag: Option<&Path>, flags: Layer) -> Result<Resolved> {
 pub fn write_setting(path: &Path, key: &str, value: Option<&str>) -> Result<()> {
     let s = setting(key).ok_or_else(|| AppError::config(format!("unknown config key '{key}'")))?;
     let text = std::fs::read_to_string(path).unwrap_or_default();
-    let mut table: toml::Table = text.parse().map_err(|e| AppError::config(format!("{}: {e}", path.display())))?;
+    let (head, block) = split_managed(&text);
+    let mut table: toml::Table = head.parse().map_err(|e| AppError::config(format!("{}: {e}", path.display())))?;
     match value {
         Some(v) => {
             let v = normalize(s.key, v)?;
@@ -422,11 +463,8 @@ pub fn write_setting(path: &Path, key: &str, value: Option<&str>) -> Result<()> 
             table.remove(s.key);
         }
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let out = toml::to_string_pretty(&table).map_err(|e| AppError::config(e.to_string()))?;
-    std::fs::write(path, out).map_err(|e| AppError::io(format!("writing {}: {e}", path.display())))
+    write_config(path, &join_managed(&out, block))
 }
 
 #[cfg(test)]

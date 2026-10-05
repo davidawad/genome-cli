@@ -93,7 +93,7 @@ fn sealed_db(dek: &Key) {
     std::env::set_var("GENOME_INSECURE_FAST_KDF", "1");
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("genome.db");
-    let (env, _) = genome_cli::keys::Envelope::create("passphrase").unwrap();
+    let (env, _) = genome_cli::keys::Envelope::create("passphrase", &genome_cli::prompt::Tty).unwrap();
     let db = Db::open_sealed(&path, env.clone(), dek.clone()).unwrap();
     let summary = format!("{{\"by_chrom\": \"{}\"}}", "x".repeat(4000));
     for i in 1..=50 {

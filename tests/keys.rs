@@ -112,6 +112,14 @@ impl Env {
             .collect()
     }
 
+    /// `genome doctor`'s "unlock" row detail.
+    fn doctor_unlock(&self) -> String {
+        let (o, _) = self.run(&["doctor", "--format", "json"]);
+        let v: Value = serde_json::from_str(&o).unwrap();
+        let row = v["data"].as_array().unwrap().iter().find(|r| r["check"] == "unlock").cloned().unwrap();
+        row["detail"].as_str().unwrap().to_string()
+    }
+
     fn key_files(&self) -> Vec<PathBuf> {
         std::fs::read_dir(self.path("keys"))
             .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "key")).collect())
@@ -132,6 +140,7 @@ fn first_run_encrypts_with_the_ssh_key_and_explains_itself() {
     let enc = t["encryption"].as_table().unwrap();
     assert_eq!(enc["ssh_fingerprints"].as_array().unwrap().len(), 1);
     assert!(cfg.contains("genome doctor") && cfg.contains("cannot be recovered"));
+    assert!(e.doctor_unlock().starts_with("unlocked by key slot ssh-"));
     // Later commands are silent and need nothing.
     let (out, err) = e.run(&["kits"]);
     assert!(out.contains("kit") && !err.contains("created an encrypted database"), "{err}");
@@ -207,8 +216,10 @@ fn key_add_and_remove() {
     let (code, err) = e.fail(e.cmd().env("GENOME_SSH_KEY", &laptop), &["key", "remove", "ssh"]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("last key slot"), "{err}");
-    let cfg = std::fs::read_to_string(e.config()).unwrap();
-    assert_eq!(cfg.matches("SHA256:").count(), 1, "config lists the remaining key only:\n{cfg}");
+    let cfg: toml::Table = std::fs::read_to_string(e.config()).unwrap().parse().unwrap();
+    let enc = cfg["encryption"].as_table().unwrap();
+    assert_eq!(enc["ssh_fingerprints"].as_array().unwrap().len(), 1, "config lists the remaining key only");
+    assert_eq!(enc["passphrase"].as_bool(), Some(false));
 }
 
 #[test]

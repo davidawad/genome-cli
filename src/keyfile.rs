@@ -85,7 +85,9 @@ pub fn read(path: &Path) -> Result<Key> {
         Err(e) => return Err(err(format!("reading key file {}: {e}", path.display()))),
     };
     ensure_private(path)?;
-    let bytes = Zeroizing::new(unhex(text.trim()).map_err(|_| err(format!("{} is not a genome-cli key file", path.display())))?);
+    let bytes = Zeroizing::new(
+        unhex(text.trim()).map_err(|_| err(format!("{} is not a genome-cli key file", path.display())))?,
+    );
     Key::from_bytes(&bytes).map_err(|_| err(format!("{} is not a genome-cli key file", path.display())))
 }
 
@@ -187,17 +189,17 @@ mod tests {
         assert_eq!((ks[0].bytes(), ks[1].bytes()), (a.bytes(), b.bytes()));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn open_key_file_is_refused() {
-        use std::os::unix::fs::PermissionsExt;
+    fn shared_key_file_is_refused() {
         let t = tempfile::tempdir().unwrap();
         let p = t.path().join("k.key");
         write_new(&p, &Key::random().unwrap()).unwrap();
-        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(perms::check_private(&p), Access::Private(_)), "{:?}", perms::check_private(&p));
+        perms::share_for_test(&p).unwrap();
+        assert!(matches!(perms::check_private(&p), Access::Open(_)), "{:?}", perms::check_private(&p));
         let e = read(&p).err().unwrap();
-        assert!(e.message.contains("accessible to other users") && e.message.contains("chmod 600"), "{}", e.message);
+        assert!(e.message.contains("accessible to other users"), "{}", e.message);
+        assert!(e.message.contains(&fix_hint(&p)), "{}", e.message);
     }
 
     #[test]

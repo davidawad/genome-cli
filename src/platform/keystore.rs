@@ -7,7 +7,13 @@
 //! Headless machines (servers, CI, containers) usually have no D-Bus session;
 //! [`backend`] then reports why the store is unavailable and callers fall back
 //! to a passphrase (`GENOME_KEY` or a prompt).
+//!
+//! The store is opt-in (`--kek keyring`, `db unlock`); key files are the
+//! default. `GENOME_NO_KEYRING=1` forbids it outright. For tests,
+//! `GENOME_TEST_KEYSTORE_DIR` replaces it with one file per entry in that
+//! directory, so keyring flows run in CI without a real credential store.
 
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use zeroize::Zeroizing;
@@ -16,12 +22,15 @@ use crate::crypto::Key;
 use crate::error::{AppError, ErrorKind, Result};
 
 pub const SERVICE: &str = "genome-cli";
+pub const NO_KEYRING_ENV: &str = "GENOME_NO_KEYRING";
+const TEST_DIR_ENV: &str = "GENOME_TEST_KEYSTORE_DIR";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
     Keychain,
     SecretService,
     CredentialManager,
+    TestDir,
 }
 
 impl Backend {
@@ -30,6 +39,7 @@ impl Backend {
             Self::Keychain => "macOS Keychain",
             Self::SecretService => "Secret Service (D-Bus)",
             Self::CredentialManager => "Windows Credential Manager",
+            Self::TestDir => "test keystore directory (GENOME_TEST_KEYSTORE_DIR)",
         }
     }
 
@@ -75,8 +85,26 @@ fn probe() -> std::result::Result<Backend, String> {
     }
 }
 
+fn forbidden() -> bool {
+    std::env::var_os(NO_KEYRING_ENV).is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+fn test_dir() -> Option<PathBuf> {
+    std::env::var_os(TEST_DIR_ENV).filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+fn test_file(account: &str) -> Option<PathBuf> {
+    test_dir().map(|d| d.join(account.replace(':', "_")))
+}
+
 /// The usable credential store, or why there is none (probed once per process).
 pub fn backend() -> std::result::Result<Backend, String> {
+    if forbidden() {
+        return Err(format!("the OS keyring is disabled ({NO_KEYRING_ENV} is set)"));
+    }
+    if test_dir().is_some() {
+        return Ok(Backend::TestDir);
+    }
     static B: OnceLock<std::result::Result<Backend, String>> = OnceLock::new();
     B.get_or_init(probe).clone()
 }
@@ -87,6 +115,14 @@ fn entry(account: &str) -> Result<keyring::Entry> {
 }
 
 pub fn get(account: &str) -> Result<Option<Key>> {
+    backend().map_err(|why| err(format!("no OS keyring: {why}")))?;
+    if let Some(f) = test_file(account) {
+        return match std::fs::read(&f) {
+            Ok(b) => Key::from_bytes(&Zeroizing::new(b)).map(Some),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(err(format!("{}: {e}", f.display()))),
+        };
+    }
     match entry(account)?.get_secret() {
         Ok(s) => Key::from_bytes(&Zeroizing::new(s)).map(Some),
         Err(keyring::Error::NoEntry) => Ok(None),
@@ -95,6 +131,11 @@ pub fn get(account: &str) -> Result<Option<Key>> {
 }
 
 pub fn set(account: &str, key: &Key) -> Result<()> {
+    backend().map_err(|why| err(format!("no OS keyring: {why}")))?;
+    if let Some(f) = test_file(account) {
+        std::fs::create_dir_all(f.parent().expect("dir"))?;
+        return std::fs::write(&f, key.bytes()).map_err(|e| err(format!("{}: {e}", f.display())));
+    }
     entry(account)?.set_secret(key.bytes()).map_err(|e| err(format!("OS keyring: {e}")))?;
     // Read back: some backends accept writes they cannot persist.
     match get(account)? {
@@ -107,6 +148,9 @@ pub fn set(account: &str, key: &Key) -> Result<()> {
 pub fn delete(account: &str) -> Result<bool> {
     if backend().is_err() {
         return Ok(false);
+    }
+    if let Some(f) = test_file(account) {
+        return Ok(std::fs::remove_file(f).is_ok());
     }
     match entry(account)?.delete_credential() {
         Ok(()) => Ok(true),

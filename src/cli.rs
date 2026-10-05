@@ -109,6 +109,9 @@ pub enum Command {
     /// Encryption at rest: init, encrypt (migrate), rekey, unlock, lock, status
     #[command(subcommand)]
     Db(DbCmd),
+    /// Keys that can decrypt the data: status, add-ssh, add-passphrase, add-file, remove
+    #[command(subcommand)]
+    Key(KeyCmd),
     /// Audit trail of commands that read or modify personal data
     #[command(subcommand)]
     Audit(AuditCmd),
@@ -314,23 +317,23 @@ pub enum DbCmd {
         /// Encrypt the new database (the default; accepted for explicitness)
         #[arg(long)]
         encrypt: bool,
-        /// Key source: auto (GENOME_KEY if set, else OS keyring, else prompt), keyring, passphrase
-        #[arg(long, value_parser = ["auto", "keyring", "passphrase"])]
+        /// Key: auto (GENOME_KEY if set, else your SSH key after asking, else a key file), ssh, file, passphrase, keyring
+        #[arg(long, value_parser = ["auto", "ssh", "file", "passphrase", "keyring"])]
         kek: Option<String>,
     },
     /// Encrypt an existing plaintext database and its genotype stores in place
     Encrypt {
-        /// Key source for the new key (see `db init`)
-        #[arg(long, value_parser = ["auto", "keyring", "passphrase"])]
+        /// Key for the new database key (see `db init`)
+        #[arg(long, value_parser = ["auto", "ssh", "file", "passphrase", "keyring"])]
         kek: Option<String>,
     },
-    /// Re-wrap the database key under a new key (new passphrase from GENOME_NEW_KEY or a prompt)
+    /// Replace every key slot, e.g. `--to ssh` to move a 0.2 database off the OS keyring
     Rekey {
-        /// Key source for the new key
-        #[arg(long, value_parser = ["auto", "keyring", "passphrase"])]
+        /// New key: ssh, file, passphrase (from GENOME_NEW_KEY or a prompt), keyring, auto
+        #[arg(long, visible_alias = "to", value_parser = ["auto", "ssh", "file", "passphrase", "keyring"])]
         kek: Option<String>,
     },
-    /// Cache the passphrase-derived key in the OS keyring until `db lock`
+    /// Cache a passphrase database's key in the OS keyring until `db lock` (opt-in)
     Unlock,
     /// Forget a cached key (`db unlock`) and remove stale temporary files
     Lock,
@@ -352,6 +355,26 @@ pub enum AuditCmd {
 pub struct DecryptArgs {
     /// File written by --encrypt-output (passphrase: GENOME_EXPORT_KEY or prompt) or `pipeline run --seal`
     pub file: PathBuf,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum KeyCmd {
+    /// Which keys can decrypt the database, and whether each is usable here
+    Status,
+    /// Let another SSH key decrypt the database (a .pub file or the key line)
+    AddSsh {
+        /// Public key: path to a .pub file, or "ssh-ed25519 AAAA..."
+        public_key: String,
+    },
+    /// Let a passphrase decrypt the database (GENOME_NEW_KEY or a prompt)
+    AddPassphrase,
+    /// Add an owner-only key file (unlocks without prompting)
+    AddFile,
+    /// Remove a key slot by id (or kind, when there is one of it); never the last
+    Remove {
+        /// Slot id from `genome key status`, or ssh|file|passphrase|keyring
+        slot: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
