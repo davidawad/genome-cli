@@ -50,6 +50,9 @@ jobs:
           ref: ${{ env.TAG }}
       - name: Install Rust ${{ matrix.toolchain }} (${{ matrix.target }})
         run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --target ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Package

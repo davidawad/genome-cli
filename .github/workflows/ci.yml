@@ -1,14 +1,10 @@
-# fmt, clippy -D warnings and the full test suite on every supported platform.
+# Fast default CI: fmt, clippy -D warnings and tests on one runner, in minutes.
 #
-# Toolchains: fsqlite 0.4 enables nightly-only features on x86_64
-# (`core_intrinsics` in fsqlite-pager/-btree) and on Windows (`windows_by_handle`
-# in fsqlite-vfs), so those rows use nightly (as rust-toolchain.toml does);
-# the aarch64 rows prove the crate builds on stable there. RUSTUP_TOOLCHAIN
-# overrides rust-toolchain.toml.
-#
-# Tests needing external tools skip with a "SKIPPED ..." line on stderr:
-# the FASTQ pipeline e2e (minimap2/samtools/bcftools), the README sample check
-# (bash + python3; Unix only).
+# aarch64 Linux builds fsqlite on stable Rust (no nightly needed there), and
+# rust-cache keeps dependency builds warm. The slow cross-platform matrix
+# (Windows, macOS x86_64/arm64, nightly x86_64) lives in ci-full.yml: run it by
+# hand (Actions > CI full matrix > Run workflow, or `gh workflow run ci-full.yml`);
+# it also runs on version tags and weekly.
 name: CI
 
 on:
@@ -20,36 +16,25 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: stable
 
 jobs:
   test:
-    name: ${{ matrix.name }} (${{ matrix.toolchain }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: linux-x86_64, os: ubuntu-latest, toolchain: nightly }
-          - { name: linux-aarch64, os: ubuntu-24.04-arm, toolchain: stable }
-          - { name: macos-arm64, os: macos-latest, toolchain: stable }
-          # Intel macOS: `macos-13` has been retired from GitHub-hosted runners
-          # (actionlint no longer accepts the label); `macos-15-intel` replaces it.
-          - { name: macos-x86_64, os: macos-15-intel, toolchain: nightly }
-          - { name: windows-x86_64, os: windows-latest, toolchain: nightly }
-    env:
-      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+    name: linux-aarch64 (stable)
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust ${{ matrix.toolchain }}
-        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component clippy,rustfmt
+      - name: Install Rust stable
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.toolchain }}
-      - name: fmt
-        run: cargo fmt --check
-      - name: clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
-      - name: test
-        run: cargo test --locked
+          key: stable
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked --no-fail-fast
